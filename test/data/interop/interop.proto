@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package interop;
+
+// Every wire shape the typed layer claims to support, in one message. The
+// fixtures beside this file are `protoc --encode` output over it, so the tests
+// compare against a real protobuf implementation, not against this library.
+
+enum EnumKind {
+  UNKNOWN = 0;
+  FIRST = 1;
+  SECOND = 2;
+}
+
+message Inner {
+  int32 n = 1;
+  string label = 2;
+}
+
+message All {
+  int32 i32 = 1;
+  int64 i64 = 2;
+  uint32 u32 = 3;
+  uint64 u64 = 4;
+  sint32 s32 = 5;
+  sint64 s64 = 6;
+  fixed32 fx32 = 7;
+  fixed64 fx64 = 8;
+  sfixed32 sfx32 = 9;
+  sfixed64 sfx64 = 10;
+  float flt = 11;
+  double dbl = 12;
+  bool flag = 13;
+  string text = 14;
+  bytes blob = 15;
+  Inner inner = 16;
+  EnumKind kind = 24;
+  repeated int32 packed_i32 = 18;
+  repeated sint64 packed_s64 = 19;
+  repeated fixed32 packed_fx32 = 20;
+  repeated int32 unpacked_i32 = 21 [packed = false];
+  repeated string words = 22;
+  repeated Inner items = 23;
+  map<string, int64> attrs = 25;
+  int32 high = 2047;
+  uint32 higher = 16384;
+}

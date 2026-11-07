@@ -1,0 +1,38 @@
+# proto: interop/interop.proto
+# type: interop.All
+i32: -1
+i64: -9000000000
+u32: 4000000000
+u64: 18446744073709551615
+s32: -2
+s64: -9000000000
+fx32: 70000
+fx64: 5000000000
+sfx32: -70000
+sfx64: -5000000000
+flt: 1.5
+dbl: -2.25
+flag: true
+text: "hello, baskingspot"
+blob: "\000\001\377"
+inner { n: 7 label: "in" }
+kind: SECOND
+packed_i32: 1
+packed_i32: 2
+packed_i32: -1
+packed_s64: -1
+packed_s64: 300
+packed_fx32: 1
+packed_fx32: 4294967295
+unpacked_i32: 5
+unpacked_i32: 6
+words: "a"
+words: ""
+words: "ccc"
+items { n: 1 label: "one" }
+items { n: 2 label: "two" }
+attrs { key: "a" value: 1 }
+attrs { key: "b" value: 2 }
+attrs { key: "c" value: 3 }
+high: 2047
+higher: 16384

@@ -1,0 +1,14 @@
+# proto: etcd/rpc.proto
+# type: etcdserverpb.WatchResponse
+header { cluster_id: 1 member_id: 2 revision: 101 raft_term: 4 leader_id: 2 }
+watch_id: 7
+created: true
+events {
+  type: PUT
+  kv { key: "/registry/nodes/a" create_revision: 99 mod_revision: 101 version: 2 value: "hello" lease: 5 }
+}
+events {
+  type: DELETE
+  kv { key: "/registry/nodes/b" mod_revision: 88 }
+  prev_kv { key: "/registry/nodes/b" create_revision: 50 mod_revision: 88 version: 3 value: "bye" }
+}

@@ -27,8 +27,9 @@
               config.devShells."zig-0-17"
             ];
 
-            # Project-specific tools.
-            packages = with pkgs; [ ];
+            # Project-specific tools. protobuf provides protoc, which is the
+            # source of truth for the wire fixtures under test/data.
+            packages = with pkgs; [ protobuf ];
           };
         };
     };

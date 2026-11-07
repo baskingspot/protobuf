@@ -1,0 +1,11 @@
+# proto: etcd/rpc.proto
+# type: etcdserverpb.RangeRequest
+key: "foo"
+range_end: "fop"
+limit: 10
+revision: 42
+sort_order: DESCEND
+sort_target: MOD
+serializable: true
+keys_only: true
+min_mod_revision: 5

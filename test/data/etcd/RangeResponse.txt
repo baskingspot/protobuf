@@ -1,0 +1,25 @@
+# proto: etcd/rpc.proto
+# type: etcdserverpb.RangeResponse
+header {
+  cluster_id: 1234
+  member_id: 5678
+  revision: 42
+  raft_term: 3
+  leader_id: 9
+}
+kvs {
+  key: "foo"
+  create_revision: 10
+  mod_revision: 42
+  version: 2
+  value: "bar"
+}
+kvs {
+  key: "\000\377\001"
+  create_revision: 1
+  mod_revision: 1
+  version: 1
+  value: "\303\050"
+}
+more: true
+count: 2

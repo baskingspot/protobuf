@@ -224,6 +224,68 @@ test "a map entry decodes, and its zero value is not written back" {
     try testing.expectEqual(0, again.value.attrs[0].value);
 }
 
+/// An editions 2023 schema's choices, in this table. `explicit` is
+/// `features.field_presence = EXPLICIT`, so a zero is a value and not absence.
+/// `expanded` is `features.repeated_field_encoding = EXPANDED`, which is what
+/// `pb.unpacked` says. `text` is `features.utf8_validation = NONE`, which is
+/// what `pb.bytes` says.
+const Editions = struct {
+    pub const protobuf: pb.Descriptor(@This()) = .{
+        .explicit = pb.field(1),
+        .packed_values = pb.field(3),
+        .expanded_values = pb.unpacked(4),
+        .text = pb.bytes(5),
+    };
+
+    explicit: ?i32 = null,
+    packed_values: []const i32 = &.{},
+    expanded_values: []const i32 = &.{},
+    text: []const u8 = "",
+};
+
+test "editions change the encoding policy, not the wire" {
+    // protoc 36.2 --encode=ed.Fields over an `edition = "2023"` file with
+    // field_presence EXPLICIT on field 1, repeated_field_encoding PACKED on 3
+    // and EXPANDED on 4, and utf8_validation NONE on 5. The explicit zero is
+    // written, field 3 is one packed block, and field 4 is one tag per element.
+    const from_protoc = [_]u8{
+        0x08, 0x00, // explicit: 0, written because presence is explicit
+        0x1a, 0x02, 0x01, 0x02, // packed: { 1, 2 }
+        0x20, 0x03, 0x20, 0x04, // expanded: 3, then 4
+        0x2a, 0x02, 'h', 'i', // text: "hi", not checked as UTF-8
+    };
+
+    var parsed = try pb.decodeFromSlice(Editions, testing.allocator, &from_protoc, .{});
+    defer parsed.deinit();
+
+    // Present, and zero: the one thing proto3 implicit presence cannot say.
+    try testing.expect(parsed.value.explicit != null);
+    try testing.expectEqual(0, parsed.value.explicit.?);
+    try testing.expectEqualSlices(i32, &.{ 1, 2 }, parsed.value.packed_values);
+    try testing.expectEqualSlices(i32, &.{ 3, 4 }, parsed.value.expanded_values);
+    try testing.expectEqualStrings("hi", parsed.value.text);
+
+    // Every editions choice here has a table entry that says the same thing,
+    // so re-encoding reproduces protoc's bytes exactly.
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try pb.encode(parsed.value, .{}, &out.writer);
+    try testing.expectEqualSlices(u8, &from_protoc, out.written());
+}
+
+test "a group is not a field this reader can parse" {
+    // The same editions file with `message_encoding = DELIMITED` on field 6:
+    // protoc writes START_GROUP, the contents, and END_GROUP. Wire types 3 and
+    // 4 were removed from proto3 and are back through editions, so a message
+    // that uses them fails before any field is looked at.
+    const delimited = [_]u8{ 0x33, 0x08, 0x07, 0x34 };
+
+    try testing.expectError(
+        error.InvalidWireType,
+        pb.decodeFromSlice(Editions, testing.allocator, &delimited, .{}),
+    );
+}
+
 test "decode from a reader copies instead of borrowing" {
     var io: std.Io.Reader = .fixed(golden);
 

@@ -37,6 +37,14 @@
 //! attrs: []const Entry = &.{},
 //! ```
 //!
+//! An editions schema's features are table entries, because they only change
+//! how fields are encoded, never the wire format: `field_presence` EXPLICIT is
+//! `?T` and IMPLICIT is a plain field, `repeated_field_encoding` EXPANDED is
+//! `unpacked`, `enum_type` CLOSED is an exhaustive enum, and `utf8_validation`
+//! NONE is `bytes` instead of `string`. `message_encoding` DELIMITED is the one
+//! feature with no entry: it puts a field in a group, and this reader rejects
+//! the group wire types.
+//!
 //! A hash map would also give up the one thing that makes map output stable:
 //! protobuf leaves the entry order unspecified, and a slice keeps it in the
 //! caller's hands. Build a lookup structure from the slice if you need one.

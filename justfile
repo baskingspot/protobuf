@@ -1,4 +1,4 @@
-# protobuf: Protocol Buffers encoding and decoding in Zig. `just --list` shows the recipes.
+# protobuf: Protocol Buffers in Zig: a field-by-field reader and writer for the wire format, with no .proto files, no generated code, and caller-owned buffers. `just --list` shows the recipes.
 # AGENTS.md holds the working conventions.
 
 [private]
@@ -10,11 +10,16 @@ default:
 test:
     zig build test --summary all
 
+[doc("Run the benchmarks (ReleaseFast). Extra args go to the benchmark binary")]
+[group("bench")]
+bench *ARGS:
+    zig build bench -- {{ ARGS }}
+
 [doc("Lint Zig, Nix, Markdown, the workflows, and this justfile: ziglint, zig fmt, nix fmt, oxfmt, actionlint, zizmor, and just --fmt")]
 [group("lint")]
 lint:
     ziglint
-    zig fmt --check src build.zig
+    zig fmt --check src bench build.zig build.zig.zon
     nix fmt -- --ci
     oxfmt --check README.md AGENTS.md .github
     actionlint
@@ -24,7 +29,7 @@ lint:
 [doc("Format everything lint checks")]
 [group("lint")]
 fmt:
-    zig fmt src build.zig
+    zig fmt src bench build.zig build.zig.zon
     nix fmt
     oxfmt README.md AGENTS.md .github
     just --fmt

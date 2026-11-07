@@ -1,18 +1,23 @@
-//! By convention, root.zig is the root source file when making a package.
+//! Protobuf wire format encoder/decoder.
+//!
+//! This module provides low-level primitives for reading and writing protobuf
+//! wire format messages without requiring .proto files or code generation.
+//!
+//! Based on the protobuf encoding specification:
+//! https://protobuf.dev/programming-guides/encoding/
+
+pub const reader = @import("Reader.zig");
+pub const Reader = reader.Reader;
+pub const Field = reader.Field;
+pub const wire = @import("wire.zig");
+pub const WireType = wire.WireType;
+pub const Error = wire.Error;
+pub const Tag = wire.Tag;
+pub const writer = @import("Writer.zig");
+pub const Writer = writer.Writer;
+
 const std = @import("std");
-const Io = std.Io;
 
-/// This is a documentation comment to explain the `printAnotherMessage` function below.
-///
-/// Accepting an `Io.Writer` instance is a handy way to write reusable code.
-pub fn printAnotherMessage(writer: *Io.Writer) Io.Writer.Error!void {
-    try writer.writeAll("Run `zig build test` to run the tests.\n");
-}
-
-pub fn add(a: i32, b: i32) i32 {
-    return a + b;
-}
-
-test "basic add functionality" {
-    try std.testing.expect(add(3, 7) == 10);
+test {
+    std.testing.refAllDecls(@This());
 }

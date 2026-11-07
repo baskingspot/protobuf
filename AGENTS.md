@@ -4,11 +4,11 @@ Working notes for AI coding agents in baskingspot/protobuf.
 
 ## What this is
 
-Protocol Buffers encoding and decoding in Zig. It is incubating: unstable, with no promises about its API.
+Protocol Buffers in Zig: a field-by-field reader and writer for the wire format, with no .proto files, no generated code, and caller-owned buffers. It is incubating: unstable, with no promises about its API.
 
 ## Environment
 
-Zig 0.17, the current stable. The flake is the tool contract, from `baskingspot/nix`: `nix develop` provides Zig, `ziglint`, and the base tools, and nothing comes from the system PATH. The justfile is the command interface: `just test`, `just lint`, `just ci`. Run `just fmt` before you commit.
+Zig 0.17, the current stable. The flake is the tool contract, from `baskingspot/nix`: `nix develop` provides Zig, `ziglint`, and the base tools, and nothing comes from the system PATH. The justfile is the command interface: `just test`, `just bench`, `just lint`, `just ci`. Run `just fmt` before you commit.
 
 A repo that must also build on the previous release follows the dual-version pattern: import `zig."0.16"` and `zig."0.17"`, give the older one its own `zig-old` shell, hold the shims in `src/compat.zig`, run `just ci` on the default shell and `just check` on the compatibility lane, and set `minimum_zig_version` to the older one. `baskingspot/cli`, `baskingspot/json5`, and `baskingspot/toml` do that today. Write down which versions the repo supports here, in this paragraph, so there is one place to look.
 

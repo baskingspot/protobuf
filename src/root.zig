@@ -11,6 +11,8 @@ const std = @import("std");
 
 pub const decode = @import("decode.zig").decode;
 pub const decodeLeaky = @import("decode.zig").decodeLeaky;
+pub const decodeFromSlice = @import("decode.zig").decodeFromSlice;
+pub const decodeFromSliceLeaky = @import("decode.zig").decodeFromSliceLeaky;
 pub const DecodeOptions = @import("decode.zig").Options;
 pub const encode = @import("encode.zig").encode;
 pub const encodedSize = @import("encode.zig").encodedSize;

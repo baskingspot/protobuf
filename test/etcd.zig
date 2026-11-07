@@ -177,7 +177,7 @@ const fixtures = testingx.fixtures(@embedFile("data/fixtures.txtar"));
 const range_golden = fixtures.hex("etcd/RangeResponse.pb");
 
 test "decode a RangeResponse protoc wrote" {
-    var parsed = try pb.decode(RangeResponse, testing.allocator, range_golden, .{});
+    var parsed = try pb.decodeFromSlice(RangeResponse, testing.allocator, range_golden, .{});
     defer parsed.deinit();
     const response = parsed.value;
 
@@ -203,7 +203,7 @@ test "decode a RangeResponse protoc wrote" {
 }
 
 test "re-encode a RangeResponse byte for byte" {
-    var parsed = try pb.decode(RangeResponse, testing.allocator, range_golden, .{});
+    var parsed = try pb.decodeFromSlice(RangeResponse, testing.allocator, range_golden, .{});
     defer parsed.deinit();
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
@@ -238,7 +238,7 @@ test "encode a RangeRequest the way protoc does" {
 const watch_golden = fixtures.hex("etcd/WatchResponse.pb");
 
 test "decode a WatchResponse with events" {
-    var parsed = try pb.decode(WatchResponse, testing.allocator, watch_golden, .{});
+    var parsed = try pb.decodeFromSlice(WatchResponse, testing.allocator, watch_golden, .{});
     defer parsed.deinit();
     const response = parsed.value;
 
@@ -263,7 +263,7 @@ test "decode a WatchResponse with events" {
 }
 
 test "re-encode a WatchResponse byte for byte" {
-    var parsed = try pb.decode(WatchResponse, testing.allocator, watch_golden, .{});
+    var parsed = try pb.decodeFromSlice(WatchResponse, testing.allocator, watch_golden, .{});
     defer parsed.deinit();
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
@@ -277,7 +277,7 @@ test "an empty message is zero bytes and decodes to defaults" {
     const request: PutRequest = .{};
     try testing.expectEqual(0, pb.encodedSize(request, .{}));
 
-    var parsed = try pb.decode(PutRequest, testing.allocator, &.{}, .{});
+    var parsed = try pb.decodeFromSlice(PutRequest, testing.allocator, &.{}, .{});
     defer parsed.deinit();
     try testing.expectEqualStrings("", parsed.value.key);
     try testing.expectEqual(0, parsed.value.lease);
@@ -293,7 +293,7 @@ test "unknown and mismatched fields are skipped" {
         0x12, 0x02, 'h', 'i', // value = "hi"
     };
 
-    var parsed = try pb.decode(PutRequest, testing.allocator, &bytes, .{});
+    var parsed = try pb.decodeFromSlice(PutRequest, testing.allocator, &bytes, .{});
     defer parsed.deinit();
     try testing.expectEqualStrings("", parsed.value.key);
     try testing.expectEqualStrings("hi", parsed.value.value);

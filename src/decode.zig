@@ -1,8 +1,13 @@
 //! Reading a message from the wire format.
 //!
-//! Decode writes into a destination as it walks, so a message with no repeated
-//! fields allocates nothing. Strings and bytes borrow from the input, which is
-//! why the caller must keep the input alive as long as the value.
+//! Decode writes into a destination as it walks, so a message whose repeated
+//! fields and strings are absent allocates nothing from the arena.
+//!
+//! Where strings and bytes end up depends on what is being read. A reader can
+//! refill its buffer between fields, so a slice into it would not survive the
+//! next read: decoding from a reader copies each one into the arena.
+//! Decoding from a complete slice borrows instead, because the bytes are not
+//! going anywhere, and then the caller must keep the slice alive.
 
 const std = @import("std");
 const Io = std.Io;
@@ -27,9 +32,9 @@ pub const Options = struct {
 
 /// A decoded message and the arena behind it.
 ///
-/// Strings, bytes, and every nested message borrow from the bytes that were
-/// decoded, so the input must outlive this. The arena holds repeated fields
-/// and nothing else.
+/// `decodeFromSlice` borrows every string and byte slice from the input, so
+/// that slice must outlive this. `decode` copies them, so the reader may be a
+/// socket or a file and the value owns everything it points at.
 pub fn Parsed(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -44,33 +49,58 @@ pub fn Parsed(comptime T: type) type {
     };
 }
 
-/// Decode one message from `bytes`.
-pub fn decode(comptime T: type, gpa: Allocator, bytes: []const u8, options: Options) Error!Parsed(T) {
+/// Decode one message from a reader, copying every string and byte slice into
+/// the arena. The reader may be a socket, a file, or a slice.
+pub fn decode(comptime T: type, gpa: Allocator, reader: *Io.Reader, options: Options) Error!Parsed(T) {
+    var parsed: Parsed(T) = .{ .arena = .init(gpa), .value = undefined };
+    errdefer parsed.arena.deinit();
+
+    const ctx: Ctx = .{ .gpa = parsed.arena.allocator(), .options = options, .copy = true };
+    parsed.value = try read(ctx, reader, T);
+    return parsed;
+}
+
+/// Decode one message from a reader into memory the caller already owns. The
+/// returned value owns nothing; the allocator has to live as long as the
+/// value, and an arena is the only sane choice.
+pub fn decodeLeaky(comptime T: type, gpa: Allocator, reader: *Io.Reader, options: Options) Error!T {
+    const ctx: Ctx = .{ .gpa = gpa, .options = options, .copy = true };
+    return read(ctx, reader, T);
+}
+
+/// Decode one message from a slice, borrowing every string and byte slice from
+/// it. `bytes` must outlive the value.
+pub fn decodeFromSlice(comptime T: type, gpa: Allocator, bytes: []const u8, options: Options) Error!Parsed(T) {
     var parsed: Parsed(T) = .{ .arena = .init(gpa), .value = undefined };
     errdefer parsed.arena.deinit();
 
     var io: Io.Reader = .fixed(bytes);
-    var r: Reader = .init(&io);
-    var ctx: Ctx = .{ .gpa = parsed.arena.allocator(), .options = options };
-    parsed.value = proto.init(T);
-    try readMessage(&ctx, &r, T, &parsed.value);
+    const ctx: Ctx = .{ .gpa = parsed.arena.allocator(), .options = options, .copy = false };
+    parsed.value = try read(ctx, &io, T);
     return parsed;
 }
 
-/// Decode into memory the caller already owns. The returned value owns
-/// nothing; the arena has to live as long as the value.
-pub fn decodeLeaky(comptime T: type, gpa: Allocator, bytes: []const u8, options: Options) Error!T {
+/// The borrowing decode, into memory the caller already owns.
+pub fn decodeFromSliceLeaky(comptime T: type, gpa: Allocator, bytes: []const u8, options: Options) Error!T {
     var io: Io.Reader = .fixed(bytes);
-    var r: Reader = .init(&io);
-    var ctx: Ctx = .{ .gpa = gpa, .options = options };
+    const ctx: Ctx = .{ .gpa = gpa, .options = options, .copy = false };
+    return read(ctx, &io, T);
+}
+
+fn read(ctx: Ctx, io: *Io.Reader, comptime T: type) Error!T {
+    var local = ctx;
+    var r: Reader = .init(io);
     var value: T = proto.init(T);
-    try readMessage(&ctx, &r, T, &value);
+    try readMessage(&local, &r, T, &value);
     return value;
 }
 
 const Ctx = struct {
     gpa: Allocator,
     options: Options,
+    /// Copy strings and bytes into the arena instead of borrowing them from
+    /// the input. A reader has to, a complete slice does not.
+    copy: bool,
 };
 
 fn readMessage(ctx: *Ctx, r: *Reader, comptime T: type, dst: *T) Error!void {
@@ -129,11 +159,11 @@ fn assignScalar(ctx: *Ctx, comptime elem: proto.Elem, field: Field, out: anytype
             out.* = std.enums.fromInt(E, tag) orelse return Error.UnknownEnumValue;
         },
         .string, .bytes => {
-            const borrowed = try field.expect(.len).data();
-            if (elem == .string and ctx.options.validate_utf8 and !std.unicode.utf8ValidateSlice(borrowed)) {
+            const payload = try payloadBytes(ctx, field.expect(.len));
+            if (elem == .string and ctx.options.validate_utf8 and !std.unicode.utf8ValidateSlice(payload)) {
                 return error.InvalidUtf8;
             }
-            out.* = borrowed;
+            out.* = payload;
         },
         .message => unreachable,
     }
@@ -194,12 +224,18 @@ fn appendPacked(
     list: *std.ArrayList(E),
     field: Field,
 ) Error!void {
-    const payload = try field.expect(.len).data();
+    const payload = try payloadBytes(ctx, field.expect(.len));
     var iterator: Field.Len.PackedIterator(E, packedEncoding(f.elem)) = .{
         .data = payload,
         .pos = 0,
     };
     while (try iterator.next()) |element| try list.append(ctx.gpa, element);
+}
+
+/// The bytes of a length-delimited field, borrowed or copied depending on the
+/// source.
+fn payloadBytes(ctx: *Ctx, len: Field.Len) Error![]const u8 {
+    return if (ctx.copy) len.bytesAlloc(ctx.gpa) else len.data();
 }
 
 fn FieldElementType(comptime f: proto.Field) type {

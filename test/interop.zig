@@ -149,7 +149,7 @@ test "encode matches protoc" {
 }
 
 test "decode what protoc wrote" {
-    var parsed = try pb.decode(All, testing.allocator, golden, .{});
+    var parsed = try pb.decodeFromSlice(All, testing.allocator, golden, .{});
     defer parsed.deinit();
     const got = parsed.value;
     const want = sample();
@@ -190,7 +190,7 @@ test "decode what protoc wrote" {
 }
 
 test "re-encode what protoc wrote" {
-    var parsed = try pb.decode(All, testing.allocator, golden, .{});
+    var parsed = try pb.decodeFromSlice(All, testing.allocator, golden, .{});
     defer parsed.deinit();
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
@@ -206,7 +206,7 @@ test "a map entry decodes, and its zero value is not written back" {
     // both are valid protobuf; only the bytes differ.
     const from_protoc = [_]u8{ 0xca, 0x01, 0x05, 0x0a, 0x01, 'c', 0x10, 0x00 };
 
-    var parsed = try pb.decode(All, testing.allocator, &from_protoc, .{});
+    var parsed = try pb.decodeFromSlice(All, testing.allocator, &from_protoc, .{});
     defer parsed.deinit();
     try testing.expectEqual(1, parsed.value.attrs.len);
     try testing.expectEqualStrings("c", parsed.value.attrs[0].key);
@@ -218,17 +218,38 @@ test "a map entry decodes, and its zero value is not written back" {
     try testing.expectEqualSlices(u8, &.{ 0xca, 0x01, 0x03, 0x0a, 0x01, 'c' }, out.written());
 
     // Which decodes back to the same entry.
-    var again = try pb.decode(All, testing.allocator, out.written(), .{});
+    var again = try pb.decodeFromSlice(All, testing.allocator, out.written(), .{});
     defer again.deinit();
     try testing.expectEqualStrings("c", again.value.attrs[0].key);
     try testing.expectEqual(0, again.value.attrs[0].value);
+}
+
+test "decode from a reader copies instead of borrowing" {
+    var io: std.Io.Reader = .fixed(golden);
+
+    var parsed = try pb.decode(All, testing.allocator, &io, .{});
+    defer parsed.deinit();
+    const got = parsed.value;
+    const want = sample();
+
+    try testing.expectEqualStrings(want.text, got.text);
+    try testing.expectEqualSlices(u8, want.blob, got.blob);
+    try testing.expectEqualStrings(want.inner.label, got.inner.label);
+    try testing.expectEqualSlices(i32, want.packed_i32, got.packed_i32);
+    try testing.expectEqualStrings("a", got.attrs[0].key);
+    try testing.expectEqualSlices(i32, want.unpacked_i32, got.unpacked_i32);
+
+    // Copied, not borrowed: the text does not point into the input.
+    const start = @intFromPtr(golden.ptr);
+    const text_at = @intFromPtr(got.text.ptr);
+    try testing.expect(text_at < start or text_at >= start + golden.len);
 }
 
 test "packed on the wire decodes into an unpacked field" {
     // Field 21 as a packed length-delimited field: tag 0xaa 0x01, two values.
     const bytes = [_]u8{ 0xaa, 0x01, 0x02, 0x05, 0x06 };
 
-    var parsed = try pb.decode(All, testing.allocator, &bytes, .{});
+    var parsed = try pb.decodeFromSlice(All, testing.allocator, &bytes, .{});
     defer parsed.deinit();
     try testing.expectEqualSlices(i32, &.{ 5, 6 }, parsed.value.unpacked_i32);
 }
@@ -238,15 +259,15 @@ test "string fields are checked as UTF-8, bytes fields are not" {
 
     // field 14, string, two bytes that are not UTF-8
     const as_text = [_]u8{ 0x72, 0x02, 0xc3, 0x28 };
-    try testing.expectError(error.InvalidUtf8, pb.decode(All, testing.allocator, &as_text, .{}));
+    try testing.expectError(error.InvalidUtf8, pb.decodeFromSlice(All, testing.allocator, &as_text, .{}));
 
-    var lenient = try pb.decode(All, testing.allocator, &as_text, .{ .validate_utf8 = false });
+    var lenient = try pb.decodeFromSlice(All, testing.allocator, &as_text, .{ .validate_utf8 = false });
     defer lenient.deinit();
     try testing.expectEqualSlices(u8, &invalid, lenient.value.text);
 
     // field 15, bytes, the same two bytes
     const as_blob = [_]u8{ 0x7a, 0x02, 0xc3, 0x28 };
-    var parsed = try pb.decode(All, testing.allocator, &as_blob, .{});
+    var parsed = try pb.decodeFromSlice(All, testing.allocator, &as_blob, .{});
     defer parsed.deinit();
     try testing.expectEqualSlices(u8, &invalid, parsed.value.blob);
 }
@@ -260,7 +281,7 @@ test "duplicate fields: last one wins for a scalar, messages merge" {
         0x82, 0x01, 0x03, 0x12, 0x01, 'x', // inner { label: "x" }
     };
 
-    var parsed = try pb.decode(All, testing.allocator, &bytes, .{});
+    var parsed = try pb.decodeFromSlice(All, testing.allocator, &bytes, .{});
     defer parsed.deinit();
     try testing.expectEqual(2, parsed.value.i32);
     try testing.expectEqual(7, parsed.value.inner.n);

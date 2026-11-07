@@ -6,15 +6,13 @@
 //! Based on the protobuf encoding specification:
 //! https://protobuf.dev/programming-guides/encoding/
 
-pub const reader = @import("Reader.zig");
-pub const Reader = reader.Reader;
-pub const Field = reader.Field;
+pub const Reader = @import("Reader.zig");
+pub const Field = Reader.Field;
 pub const wire = @import("wire.zig");
 pub const WireType = wire.WireType;
 pub const Error = wire.Error;
 pub const Tag = wire.Tag;
-pub const writer = @import("Writer.zig");
-pub const Writer = writer.Writer;
+pub const Writer = @import("Writer.zig");
 
 const std = @import("std");
 

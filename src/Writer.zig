@@ -25,181 +25,181 @@ const encodeVarint = wire.encodeVarint;
 const zigzagEncode = wire.zigzagEncode;
 
 /// Builds a protobuf-encoded message by writing to an Io.Writer.
-pub const Writer = struct {
-    io: *Io.Writer,
+const Writer = @This();
 
-    pub fn init(writer: *Io.Writer) Writer {
-        return .{ .io = writer };
-    }
+io: *Io.Writer,
 
-    /// Write a raw varint. Useful when length is known upfront.
-    pub fn writeVarint(self: *Writer, comptime T: type, value: T) !void {
-        var buf: [max_varint_len]u8 = undefined;
-        const data = encodeVarint(T, value, &buf) catch unreachable;
-        try self.io.writeAll(data);
-    }
+pub fn init(writer: *Io.Writer) Writer {
+    return .{ .io = writer };
+}
 
-    /// Write a tag (field number + wire type).
-    pub fn writeTag(self: *Writer, tag: Tag) !void {
-        try self.writeVarint(u32, tag.encode());
-    }
+/// Write a raw varint. Useful when length is known upfront.
+pub fn writeVarint(self: *Writer, comptime T: type, value: T) !void {
+    var buf: [max_varint_len]u8 = undefined;
+    const data = encodeVarint(T, value, &buf) catch unreachable;
+    try self.io.writeAll(data);
+}
 
-    /// Write a scalar value (no tag).
-    pub fn writeScalar(self: *Writer, comptime scalar: Scalar, value: Scalar.Type(scalar)) !void {
-        try switch (scalar) {
-            // Varint types
-            .i32 => self.writeVarint(i64, @as(i64, value)),
-            .i64 => self.writeVarint(i64, value),
-            .u32 => self.writeVarint(u32, value),
-            .u64 => self.writeVarint(u64, value),
-            .sint32 => self.writeVarint(u32, zigzagEncode(i32, value)),
-            .sint64 => self.writeVarint(u64, zigzagEncode(i64, value)),
-            .bool => self.writeVarint(u8, @intFromBool(value)),
-            // Fixed64 types
-            .fixed64 => self.io.writeInt(u64, value, .little),
-            .sfixed64 => self.io.writeInt(u64, @bitCast(value), .little),
-            .double => self.io.writeInt(u64, @bitCast(value), .little),
-            // Fixed32 types
-            .fixed32 => self.io.writeInt(u32, value, .little),
-            .sfixed32 => self.io.writeInt(u32, @bitCast(value), .little),
-            .float => self.io.writeInt(u32, @bitCast(value), .little),
-        };
-    }
+/// Write a tag (field number + wire type).
+pub fn writeTag(self: *Writer, tag: Tag) !void {
+    try self.writeVarint(u32, tag.encode());
+}
 
-    /// Write length-delimited bytes (no tag).
-    pub fn writeLen(self: *Writer, value: []const u8) !void {
-        try self.writeVarint(usize, value.len);
-        try self.io.writeAll(value);
-    }
+/// Write a scalar value (no tag).
+pub fn writeScalar(self: *Writer, comptime scalar: Scalar, value: Scalar.Type(scalar)) !void {
+    try switch (scalar) {
+        // Varint types
+        .i32 => self.writeVarint(i64, @as(i64, value)),
+        .i64 => self.writeVarint(i64, value),
+        .u32 => self.writeVarint(u32, value),
+        .u64 => self.writeVarint(u64, value),
+        .sint32 => self.writeVarint(u32, zigzagEncode(i32, value)),
+        .sint64 => self.writeVarint(u64, zigzagEncode(i64, value)),
+        .bool => self.writeVarint(u8, @intFromBool(value)),
+        // Fixed64 types
+        .fixed64 => self.io.writeInt(u64, value, .little),
+        .sfixed64 => self.io.writeInt(u64, @bitCast(value), .little),
+        .double => self.io.writeInt(u64, @bitCast(value), .little),
+        // Fixed32 types
+        .fixed32 => self.io.writeInt(u32, value, .little),
+        .sfixed32 => self.io.writeInt(u32, @bitCast(value), .little),
+        .float => self.io.writeInt(u32, @bitCast(value), .little),
+    };
+}
 
-    test writeScalar {
-        var write_buf: [64]u8 = undefined;
-        var io_writer: Io.Writer = .fixed(&write_buf);
-        var w: Writer = .init(&io_writer);
+/// Write length-delimited bytes (no tag).
+pub fn writeLen(self: *Writer, value: []const u8) !void {
+    try self.writeVarint(usize, value.len);
+    try self.io.writeAll(value);
+}
 
-        // string field (tag + len + data)
-        try w.writeTag(try .init(1, .len));
-        try w.writeLen("hello");
+test writeScalar {
+    var write_buf: [64]u8 = undefined;
+    var io_writer: Io.Writer = .fixed(&write_buf);
+    var w: Writer = .init(&io_writer);
 
-        // int64 field
-        try w.writeTag(try .init(2, .varint));
-        try w.writeScalar(.i64, 42);
+    // string field (tag + len + data)
+    try w.writeTag(try .init(1, .len));
+    try w.writeLen("hello");
 
-        // bool field
-        try w.writeTag(try .init(3, .varint));
-        try w.writeScalar(.bool, true);
+    // int64 field
+    try w.writeTag(try .init(2, .varint));
+    try w.writeScalar(.i64, 42);
 
-        // double field
-        try w.writeTag(try .init(4, .fixed64));
-        try w.writeScalar(.double, 3.14);
+    // bool field
+    try w.writeTag(try .init(3, .varint));
+    try w.writeScalar(.bool, true);
 
-        const expected = [_]u8{
-            0x0a, 0x05, 'h', 'e', 'l', 'l', 'o', // field 1: string "hello"
-            0x10, 0x2a, // field 2: int64 42
-            0x18, 0x01, // field 3: bool true
-            0x21, 0x1f, 0x85, 0xeb, 0x51, 0xb8, 0x1e, 0x09, 0x40, // field 4: double 3.14
-        };
+    // double field
+    try w.writeTag(try .init(4, .fixed64));
+    try w.writeScalar(.double, 3.14);
 
-        try testing.expectEqualSlices(u8, &expected, io_writer.buffered());
-    }
+    const expected = [_]u8{
+        0x0a, 0x05, 'h', 'e', 'l', 'l', 'o', // field 1: string "hello"
+        0x10, 0x2a, // field 2: int64 42
+        0x18, 0x01, // field 3: bool true
+        0x21, 0x1f, 0x85, 0xeb, 0x51, 0xb8, 0x1e, 0x09, 0x40, // field 4: double 3.14
+    };
 
-    test "packed varint" {
-        var write_buf: [64]u8 = undefined;
-        var io_writer: Io.Writer = .fixed(&write_buf);
-        var w: Writer = .init(&io_writer);
+    try testing.expectEqualSlices(u8, &expected, io_writer.buffered());
+}
 
-        // Build packed data in inner writer
-        var inner_buf: [32]u8 = undefined;
-        var inner_io: Io.Writer = .fixed(&inner_buf);
-        var inner: Writer = .init(&inner_io);
+test "packed varint" {
+    var write_buf: [64]u8 = undefined;
+    var io_writer: Io.Writer = .fixed(&write_buf);
+    var w: Writer = .init(&io_writer);
 
-        try inner.writeScalar(.i64, 1);
-        try inner.writeScalar(.i64, 2);
-        try inner.writeScalar(.i64, 3);
+    // Build packed data in inner writer
+    var inner_buf: [32]u8 = undefined;
+    var inner_io: Io.Writer = .fixed(&inner_buf);
+    var inner: Writer = .init(&inner_io);
 
-        // Write to main writer
-        try w.writeTag(try .init(1, .len));
-        try w.writeLen(inner_io.buffered());
+    try inner.writeScalar(.i64, 1);
+    try inner.writeScalar(.i64, 2);
+    try inner.writeScalar(.i64, 3);
 
-        const written = io_writer.buffered();
-        try testing.expectEqual(@as(u8, 0x0a), written[0]); // tag(1, LEN)
-        try testing.expectEqual(@as(u8, 0x03), written[1]); // length 3
-        try testing.expectEqual(@as(u8, 0x01), written[2]); // 1
-        try testing.expectEqual(@as(u8, 0x02), written[3]); // 2
-        try testing.expectEqual(@as(u8, 0x03), written[4]); // 3
-    }
+    // Write to main writer
+    try w.writeTag(try .init(1, .len));
+    try w.writeLen(inner_io.buffered());
 
-    test "packed fixed" {
-        var write_buf: [64]u8 = undefined;
-        var io_writer: Io.Writer = .fixed(&write_buf);
-        var w: Writer = .init(&io_writer);
+    const written = io_writer.buffered();
+    try testing.expectEqual(@as(u8, 0x0a), written[0]); // tag(1, LEN)
+    try testing.expectEqual(@as(u8, 0x03), written[1]); // length 3
+    try testing.expectEqual(@as(u8, 0x01), written[2]); // 1
+    try testing.expectEqual(@as(u8, 0x02), written[3]); // 2
+    try testing.expectEqual(@as(u8, 0x03), written[4]); // 3
+}
 
-        // Build packed data in inner writer
-        var inner_buf: [32]u8 = undefined;
-        var inner_io: Io.Writer = .fixed(&inner_buf);
-        var inner: Writer = .init(&inner_io);
+test "packed fixed" {
+    var write_buf: [64]u8 = undefined;
+    var io_writer: Io.Writer = .fixed(&write_buf);
+    var w: Writer = .init(&io_writer);
 
-        try inner.writeScalar(.fixed32, 100);
-        try inner.writeScalar(.fixed32, 200);
+    // Build packed data in inner writer
+    var inner_buf: [32]u8 = undefined;
+    var inner_io: Io.Writer = .fixed(&inner_buf);
+    var inner: Writer = .init(&inner_io);
 
-        // Write to main writer
-        try w.writeTag(try .init(1, .len));
-        try w.writeLen(inner_io.buffered());
+    try inner.writeScalar(.fixed32, 100);
+    try inner.writeScalar(.fixed32, 200);
 
-        const written = io_writer.buffered();
-        try testing.expectEqual(@as(u8, 0x0a), written[0]); // tag(1, LEN)
-        try testing.expectEqual(@as(u8, 0x08), written[1]); // length 8
-        try testing.expectEqual(@as(u32, 100), mem.readInt(u32, written[2..6], .little));
-        try testing.expectEqual(@as(u32, 200), mem.readInt(u32, written[6..10], .little));
-    }
+    // Write to main writer
+    try w.writeTag(try .init(1, .len));
+    try w.writeLen(inner_io.buffered());
 
-    test "packed sint" {
-        var write_buf: [64]u8 = undefined;
-        var io_writer: Io.Writer = .fixed(&write_buf);
-        var w: Writer = .init(&io_writer);
+    const written = io_writer.buffered();
+    try testing.expectEqual(@as(u8, 0x0a), written[0]); // tag(1, LEN)
+    try testing.expectEqual(@as(u8, 0x08), written[1]); // length 8
+    try testing.expectEqual(@as(u32, 100), mem.readInt(u32, written[2..6], .little));
+    try testing.expectEqual(@as(u32, 200), mem.readInt(u32, written[6..10], .little));
+}
 
-        // Build packed data in inner writer
-        var inner_buf: [32]u8 = undefined;
-        var inner_io: Io.Writer = .fixed(&inner_buf);
-        var inner: Writer = .init(&inner_io);
+test "packed sint" {
+    var write_buf: [64]u8 = undefined;
+    var io_writer: Io.Writer = .fixed(&write_buf);
+    var w: Writer = .init(&io_writer);
 
-        try inner.writeScalar(.sint32, -1);
-        try inner.writeScalar(.sint32, 0);
-        try inner.writeScalar(.sint32, 1);
+    // Build packed data in inner writer
+    var inner_buf: [32]u8 = undefined;
+    var inner_io: Io.Writer = .fixed(&inner_buf);
+    var inner: Writer = .init(&inner_io);
 
-        // Write to main writer
-        try w.writeTag(try .init(1, .len));
-        try w.writeLen(inner_io.buffered());
+    try inner.writeScalar(.sint32, -1);
+    try inner.writeScalar(.sint32, 0);
+    try inner.writeScalar(.sint32, 1);
 
-        const written = io_writer.buffered();
-        try testing.expectEqual(@as(u8, 0x0a), written[0]); // tag(1, LEN)
-        try testing.expectEqual(@as(u8, 0x03), written[1]); // length 3
-        try testing.expectEqual(@as(u8, 0x01), written[2]); // zigzag(-1) = 1
-        try testing.expectEqual(@as(u8, 0x00), written[3]); // zigzag(0) = 0
-        try testing.expectEqual(@as(u8, 0x02), written[4]); // zigzag(1) = 2
-    }
+    // Write to main writer
+    try w.writeTag(try .init(1, .len));
+    try w.writeLen(inner_io.buffered());
 
-    test writeLen {
-        var write_buf: [64]u8 = undefined;
-        var io_writer: Io.Writer = .fixed(&write_buf);
-        var w: Writer = .init(&io_writer);
+    const written = io_writer.buffered();
+    try testing.expectEqual(@as(u8, 0x0a), written[0]); // tag(1, LEN)
+    try testing.expectEqual(@as(u8, 0x03), written[1]); // length 3
+    try testing.expectEqual(@as(u8, 0x01), written[2]); // zigzag(-1) = 1
+    try testing.expectEqual(@as(u8, 0x00), written[3]); // zigzag(0) = 0
+    try testing.expectEqual(@as(u8, 0x02), written[4]); // zigzag(1) = 2
+}
 
-        // Build nested message in inner writer
-        var nested_buf: [32]u8 = undefined;
-        var nested_io: Io.Writer = .fixed(&nested_buf);
-        var nested: Writer = .init(&nested_io);
+test writeLen {
+    var write_buf: [64]u8 = undefined;
+    var io_writer: Io.Writer = .fixed(&write_buf);
+    var w: Writer = .init(&io_writer);
 
-        try nested.writeTag(try .init(1, .varint));
-        try nested.writeScalar(.i32, 123);
+    // Build nested message in inner writer
+    var nested_buf: [32]u8 = undefined;
+    var nested_io: Io.Writer = .fixed(&nested_buf);
+    var nested: Writer = .init(&nested_io);
 
-        // Write to main writer
-        try w.writeTag(try .init(1, .len));
-        try w.writeLen(nested_io.buffered());
+    try nested.writeTag(try .init(1, .varint));
+    try nested.writeScalar(.i32, 123);
 
-        const written = io_writer.buffered();
-        try testing.expectEqual(@as(u8, 0x0a), written[0]); // tag(1, LEN)
-        try testing.expectEqual(@as(u8, 0x02), written[1]); // length 2
-        try testing.expectEqual(@as(u8, 0x08), written[2]); // nested tag(1, VARINT)
-        try testing.expectEqual(@as(u8, 0x7b), written[3]); // 123
-    }
-};
+    // Write to main writer
+    try w.writeTag(try .init(1, .len));
+    try w.writeLen(nested_io.buffered());
+
+    const written = io_writer.buffered();
+    try testing.expectEqual(@as(u8, 0x0a), written[0]); // tag(1, LEN)
+    try testing.expectEqual(@as(u8, 0x02), written[1]); // length 2
+    try testing.expectEqual(@as(u8, 0x08), written[2]); // nested tag(1, VARINT)
+    try testing.expectEqual(@as(u8, 0x7b), written[3]); // 123
+}

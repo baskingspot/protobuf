@@ -45,6 +45,9 @@ pub const Error = error{
     BufferTooSmall,
     /// Invalid UTF-8 in string field
     InvalidUtf8,
+    /// The payload is not already in the reader's buffer, so it cannot be
+    /// borrowed without reading it
+    NotBuffered,
     /// Underlying I/O read failed
     ReadFailed,
 };
@@ -307,3 +310,47 @@ pub const Encoding = enum {
     sint,
     fixed,
 };
+
+/// Bytes the varint encoding of `value` occupies, from 1 to 10. Signed values
+/// are sign-extended to 64 bits first, the way the writer encodes them.
+pub fn varintLen(value: anytype) usize {
+    const V = @TypeOf(value);
+    const bits: u64 = switch (@typeInfo(V)) {
+        .comptime_int => value,
+        .int => |i| if (i.signedness == .signed) @bitCast(@as(i64, value)) else value,
+        else => @compileError("varintLen needs an integer, found " ++ @typeName(V)),
+    };
+    return @max(1, (@bitSizeOf(u64) - @clz(bits) + 6) / 7);
+}
+
+test varintLen {
+    for ([_]u64{
+        0,          1,          127,                128,                255, 256, 16383, 16384,
+        0x7FFFFFFF, 0xFFFFFFFF, 0x7FFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF,
+    }) |value| {
+        var buf: [max_varint_len]u8 = undefined;
+        const data = try encodeVarint(u64, value, &buf);
+        try testing.expectEqual(data.len, varintLen(value));
+    }
+
+    var buf: [max_varint_len]u8 = undefined;
+    for ([_]i64{ -1, -128, -0x8000000000000000 }) |value| {
+        const data = try encodeVarint(i64, value, &buf);
+        try testing.expectEqual(data.len, varintLen(value));
+    }
+}
+
+/// Bytes the scalar occupies alone, with no tag and no length prefix.
+pub fn scalarLen(comptime scalar: Scalar, value: Scalar.Type(scalar)) usize {
+    return switch (scalar) {
+        .i32 => varintLen(value),
+        .i64 => varintLen(value),
+        .u32 => varintLen(value),
+        .u64 => varintLen(value),
+        .sint32 => varintLen(zigzagEncode(i32, value)),
+        .sint64 => varintLen(zigzagEncode(i64, value)),
+        .bool => 1,
+        .fixed64, .sfixed64, .double => 8,
+        .fixed32, .sfixed32, .float => 4,
+    };
+}

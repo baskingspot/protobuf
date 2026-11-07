@@ -32,6 +32,16 @@ pub const Field = union(enum) {
         return @FieldType(Field, @tagName(kind));
     }
 
+    /// The wire type this field arrived as.
+    pub fn wireType(self: Field) wire.WireType {
+        return switch (self) {
+            .varint => .varint,
+            .fixed64 => .fixed64,
+            .len => .len,
+            .fixed32 => .fixed32,
+        };
+    }
+
     /// Get the field number regardless of wire type.
     pub fn fieldNumber(self: Field) u32 {
         return switch (self) {
@@ -112,19 +122,34 @@ pub const Field = union(enum) {
 
         /// Read as UTF-8 string into the provided buffer.
         pub fn string(self: Len, buf: []u8) ![]const u8 {
-            const data = try self.bytes(buf);
-            if (!unicode.utf8ValidateSlice(data)) return Error.InvalidUtf8;
-            return data;
+            const payload = try self.bytes(buf);
+            if (!unicode.utf8ValidateSlice(payload)) return Error.InvalidUtf8;
+            return payload;
         }
 
         /// Read as UTF-8 string with allocation.
         pub fn stringAlloc(self: Len, gpa: Allocator) ![]u8 {
-            const data = try self.bytesAlloc(gpa);
-            if (!unicode.utf8ValidateSlice(data)) {
-                gpa.free(data);
+            const payload = try self.bytesAlloc(gpa);
+            if (!unicode.utf8ValidateSlice(payload)) {
+                gpa.free(payload);
                 return Error.InvalidUtf8;
             }
-            return data;
+            return payload;
+        }
+
+        /// Borrow the payload from the reader's buffer, with no copy.
+        ///
+        /// Requires the whole payload to be buffered already, which is true for
+        /// a reader over a complete slice and false for a stream whose payload
+        /// is larger than the buffer. Returns `error.NotBuffered` in that case;
+        /// `bytes` is the copying path for any reader.
+        pub fn data(self: Len) ![]const u8 {
+            const avail = self.io.buffered();
+            if (avail.len < self.length) return Error.NotBuffered;
+            const dest = avail[0..self.length];
+            self.io.toss(self.length);
+            if (self.parent) |p| try p.advance(self.length);
+            return dest;
         }
 
         /// Read raw bytes into the provided buffer.
@@ -135,11 +160,7 @@ pub const Field = union(enum) {
                 error.EndOfStream => return Error.Truncated,
                 error.ReadFailed => return Error.ReadFailed,
             };
-            if (self.parent) |p| {
-                if (p.remaining) |*rem| {
-                    rem.* -= self.length;
-                }
-            }
+            if (self.parent) |p| try p.advance(self.length);
             return dest;
         }
 
@@ -151,23 +172,15 @@ pub const Field = union(enum) {
                 error.EndOfStream => return Error.Truncated,
                 error.ReadFailed => return Error.ReadFailed,
             };
-            if (self.parent) |p| {
-                if (p.remaining) |*rem| {
-                    rem.* -= self.length;
-                }
-            }
+            if (self.parent) |p| try p.advance(self.length);
             return buf;
         }
 
         /// Read as embedded message (streaming, no copy).
         /// Returns a Reader that reads directly from the parent stream.
         /// Decrements parent's remaining since the bytes will be consumed by the nested reader.
-        pub fn message(self: Len) Reader {
-            if (self.parent) |p| {
-                if (p.remaining) |*rem| {
-                    rem.* -= self.length;
-                }
-            }
+        pub fn message(self: Len) !Reader {
+            if (self.parent) |p| try p.advance(self.length);
             return .{ .io = self.io, .remaining = self.length, .parent = self.parent };
         }
 
@@ -177,11 +190,7 @@ pub const Field = union(enum) {
                 error.EndOfStream => return Error.Truncated,
                 error.ReadFailed => return Error.ReadFailed,
             };
-            if (self.parent) |p| {
-                if (p.remaining) |*rem| {
-                    rem.* -= self.length;
-                }
-            }
+            if (self.parent) |p| try p.advance(self.length);
         }
 
         /// Iterator for packed repeated fields.
@@ -254,8 +263,8 @@ pub const Field = union(enum) {
             comptime encoding: Encoding,
             buf: []u8,
         ) !PackedIterator(T, encoding) {
-            const data = try self.bytes(buf);
-            return .{ .data = data, .pos = 0 };
+            const payload = try self.bytes(buf);
+            return .{ .data = payload, .pos = 0 };
         }
 
         /// Read packed repeated field with allocation, returns iterator.
@@ -266,10 +275,10 @@ pub const Field = union(enum) {
             comptime encoding: Encoding,
             gpa: Allocator,
         ) !PackedRepeated(T, encoding) {
-            const data = try self.bytesAlloc(gpa);
+            const payload = try self.bytesAlloc(gpa);
             return .{
-                .iter = .{ .data = data, .pos = 0 },
-                .data = data,
+                .iter = .{ .data = payload, .pos = 0 },
+                .data = payload,
             };
         }
     };
@@ -277,82 +286,93 @@ pub const Field = union(enum) {
 
 /// Reads fields from a protobuf-encoded message.
 /// When remaining is set, acts as a bounded reader for nested messages.
-pub const Reader = struct {
-    io: *Io.Reader,
-    remaining: ?usize = null,
-    parent: ?*Reader = null,
+const Reader = @This();
 
-    pub fn init(reader: *Io.Reader) Reader {
-        return .{ .io = reader };
+io: *Io.Reader,
+remaining: ?usize = null,
+parent: ?*Reader = null,
+
+pub fn init(reader: *Io.Reader) Reader {
+    return .{ .io = reader };
+}
+
+/// Decrement remaining bytes (for bounded readers).
+/// A step past the end is an error, not a wrapping subtraction: a length
+/// that does not fit the enclosing message is malformed input, and letting
+/// it through would make `remaining` meaningless for every field after it.
+fn advance(self: *Reader, n: usize) !void {
+    if (self.remaining) |*rem| {
+        if (rem.* < n) return Error.Truncated;
+        rem.* -= n;
+    }
+}
+
+/// Read the next field, or return null if at end of message.
+pub fn next(self: *Reader) !?Field {
+    // If bounded and exhausted, return null
+    if (self.remaining) |rem| {
+        if (rem == 0) return null;
     }
 
-    /// Decrement remaining bytes (for bounded readers).
-    fn advance(self: *Reader, n: usize) void {
-        if (self.remaining) |*rem| rem.* -= n;
-    }
+    // Try to read tag - EOF means end of message (unbounded) or error (bounded)
+    const tag, const tag_len = readVarintFromIo(self.io, u64) catch |err| switch (err) {
+        Error.Truncated => return if (self.remaining == null) null else err,
+        else => |e| return e,
+    };
 
-    /// Read the next field, or return null if at end of message.
-    pub fn next(self: *Reader) !?Field {
-        // If bounded and exhausted, return null
-        if (self.remaining) |rem| {
-            if (rem == 0) return null;
-        }
+    self.advance(tag_len) catch return Error.Truncated;
 
-        // Try to read tag - EOF means end of message (unbounded) or error (bounded)
-        const tag, const tag_len = readVarintFromIo(self.io, u64) catch |err| switch (err) {
-            Error.Truncated => return if (self.remaining == null) null else err,
-            else => |e| return e,
-        };
+    const parsed: Tag = try .parse(tag);
 
-        self.advance(tag_len);
-
-        const parsed: Tag = try .parse(tag);
-
-        return switch (parsed.wire_type) {
-            .varint => {
-                const value, const value_len = try readVarintFromIo(self.io, u64);
-                self.advance(value_len);
-                return .{ .varint = .{
-                    .field_number = parsed.field_number,
-                    .value = value,
-                } };
-            },
-            .fixed64 => {
-                const value = self.io.takeInt(u64, .little) catch |err| switch (err) {
-                    error.EndOfStream => return Error.Truncated,
-                    error.ReadFailed => return Error.ReadFailed,
-                };
-                self.advance(8);
-                return .{ .fixed64 = .{
-                    .field_number = parsed.field_number,
-                    .value = value,
-                } };
-            },
-            .len => {
-                const len, const len_len = try readVarintFromIo(self.io, u64);
-                self.advance(len_len);
-                const length: usize = @intCast(len);
-                return .{ .len = .{
-                    .field_number = parsed.field_number,
-                    .length = length,
-                    .io = self.io,
-                    .parent = self,
-                } };
-            },
-            .fixed32 => {
-                const value = self.io.takeInt(u32, .little) catch |err| switch (err) {
-                    error.EndOfStream => return Error.Truncated,
-                    error.ReadFailed => return Error.ReadFailed,
-                };
-                self.advance(4);
-                return .{ .fixed32 = .{
-                    .field_number = parsed.field_number,
-                    .value = value,
-                } };
-            },
-        };
-    }
-};
+    return switch (parsed.wire_type) {
+        .varint => {
+            const value, const value_len = try readVarintFromIo(self.io, u64);
+            try self.advance(value_len);
+            return .{ .varint = .{
+                .field_number = parsed.field_number,
+                .value = value,
+            } };
+        },
+        .fixed64 => {
+            const value = self.io.takeInt(u64, .little) catch |err| switch (err) {
+                error.EndOfStream => return Error.Truncated,
+                error.ReadFailed => return Error.ReadFailed,
+            };
+            try self.advance(8);
+            return .{ .fixed64 = .{
+                .field_number = parsed.field_number,
+                .value = value,
+            } };
+        },
+        .len => {
+            const len, const len_len = try readVarintFromIo(self.io, u64);
+            try self.advance(len_len);
+            const length: usize = std.math.cast(usize, len) orelse return Error.Truncated;
+            // A payload longer than the field's own message is malformed,
+            // and the payload code below trusts this length.
+            if (self.remaining) |rem| {
+                if (length > rem) return Error.Truncated;
+            }
+            return .{ .len = .{
+                .field_number = parsed.field_number,
+                .length = length,
+                .io = self.io,
+                .parent = self,
+            } };
+        },
+        .fixed32 => {
+            const value = self.io.takeInt(u32, .little) catch |err| switch (err) {
+                error.EndOfStream => return Error.Truncated,
+                error.ReadFailed => return Error.ReadFailed,
+            };
+            try self.advance(4);
+            return .{ .fixed32 = .{
+                .field_number = parsed.field_number,
+                .value = value,
+            } };
+        },
+    };
+}
 
 test Reader {
     // Basic varint
@@ -421,7 +441,7 @@ test Reader {
             const field = (try r.next()).?;
             try testing.expectEqual(@as(u32, 2), field.fieldNumber());
 
-            var nested = field.expect(.len).message();
+            var nested = field.expect(.len).message() catch unreachable;
 
             // Nested field 1: string
             {
@@ -487,7 +507,7 @@ test "bounded reader" {
         {
             const field = (try r.next()).?;
             try testing.expectEqual(@as(u32, 1), field.fieldNumber());
-            var nested = field.expect(.len).message();
+            var nested = field.expect(.len).message() catch unreachable;
             try testing.expectEqual(@as(usize, 0), nested.remaining.?);
             try testing.expect((try nested.next()) == null);
         }
@@ -517,7 +537,7 @@ test "bounded reader" {
 
         const field = (try r.next()).?;
         try testing.expectEqual(@as(u32, 1), field.fieldNumber());
-        var nested = field.expect(.len).message();
+        var nested = field.expect(.len).message() catch unreachable;
         try testing.expectEqual(@as(usize, 24), nested.remaining.?);
 
         // Nested field 1: varint
@@ -568,7 +588,7 @@ test "bounded reader" {
         var r: Reader = .init(&io_reader);
 
         const field = (try r.next()).?;
-        var nested = field.expect(.len).message();
+        var nested = field.expect(.len).message() catch unreachable;
         try testing.expectEqual(@as(usize, 11), nested.remaining.?);
 
         // Skip field 1
@@ -612,7 +632,7 @@ test "bounded reader" {
         var r: Reader = .init(&io_reader);
 
         const field = (try r.next()).?;
-        var outer = field.expect(.len).message();
+        var outer = field.expect(.len).message() catch unreachable;
 
         // Outer field 1
         {
@@ -623,7 +643,7 @@ test "bounded reader" {
         // Outer field 2: inner nested
         {
             const of = (try outer.next()).?;
-            var inner = of.expect(.len).message();
+            var inner = of.expect(.len).message() catch unreachable;
 
             // Inner field 1
             {
@@ -658,7 +678,7 @@ test "bounded reader" {
         var r: Reader = .init(&io_reader);
 
         const field = (try r.next()).?;
-        var nested = field.expect(.len).message();
+        var nested = field.expect(.len).message() catch unreachable;
 
         const nf = (try nested.next()).?;
         try testing.expectEqual(@as(u32, 1), nf.fieldNumber());
@@ -688,7 +708,7 @@ test "bounded reader" {
         var r: Reader = .init(&io_reader);
 
         const field = (try r.next()).?;
-        var nested = field.expect(.len).message();
+        var nested = field.expect(.len).message() catch unreachable;
         try testing.expectEqual(@as(usize, 4), nested.remaining.?);
 
         const nf = (try nested.next()).?;
@@ -697,4 +717,50 @@ test "bounded reader" {
         try testing.expectEqual(@as(usize, 0), nested.remaining.?);
         try testing.expect((try nested.next()) == null);
     }
+}
+
+test "a payload longer than its message is truncated, not wrapped" {
+    // The nested message claims 4 bytes but holds a field claiming 127. Before
+    // the bound check, the skip below underflowed `remaining` and the reader
+    // kept reading past the nested message's end.
+    const data = [_]u8{
+        0x0a, 0x04, // field 1: LEN, 4 bytes
+        0x0a, 0x7f, // nested field 1: LEN, claims 127
+        0x41, 0x42, // bytes that belong to the outer message
+    };
+
+    var io_reader: Io.Reader = .fixed(&data);
+    var r: Reader = .init(&io_reader);
+    const field = (try r.next()).?;
+    var nested = try field.expect(.len).message();
+    try testing.expectError(Error.Truncated, nested.next());
+}
+
+test "a varint longer than its message is truncated, not wrapped" {
+    // Nested message of 2 bytes holding a 1-byte tag and a 2-byte varint.
+    const data = [_]u8{
+        0x0a, 0x02, // field 1: LEN, 2 bytes
+        0x08, 0x80, // nested field 1: varint, tag plus one unterminated byte
+        0x01, // a byte that belongs to the outer message
+    };
+
+    var io_reader: Io.Reader = .fixed(&data);
+    var r: Reader = .init(&io_reader);
+    const field = (try r.next()).?;
+    var nested = try field.expect(.len).message();
+    try testing.expectError(Error.Truncated, nested.next());
+}
+
+test "data borrows from the input buffer" {
+    const data = [_]u8{
+        0x0a, 0x05, 'h', 'e', 'l', 'l', 'o',
+    };
+
+    var io_reader: Io.Reader = .fixed(&data);
+    var r: Reader = .init(&io_reader);
+    const field = (try r.next()).?;
+    const borrowed = try field.expect(.len).data();
+    try testing.expectEqualStrings("hello", borrowed);
+    // No copy: the bytes are the input's own.
+    try testing.expectEqual(@intFromPtr(&data[2]), @intFromPtr(borrowed.ptr));
 }

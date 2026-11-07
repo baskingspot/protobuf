@@ -30,6 +30,27 @@ pub fn build(b: *std.Build) void {
     passthruArgs(b, run_mod_tests);
     test_step.dependOn(&run_mod_tests.step);
 
+    // The interop tests compare against bytes protoc wrote, kept under
+    // test/data. They are their own modules so the package itself does not
+    // carry them.
+    for ([_][]const u8{ "test/interop.zig", "test/etcd.zig" }) |path| {
+        const tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(path),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "protobuf", .module = mod },
+                    .{ .name = "testingx", .module = testingx_dep.module("testingx") },
+                },
+            }),
+            .test_runner = runner,
+        });
+        const run = b.addRunArtifact(tests);
+        passthruArgs(b, run);
+        test_step.dependOn(&run.step);
+    }
+
     // Benchmarks. testingx's addBench builds the suite as ReleaseFast.
     if (b.lazyImport(@This(), "testingx")) |testingx_build| {
         const run_bench = testingx_build.addBench(b, .{

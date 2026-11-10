@@ -321,9 +321,14 @@ test "string fields are checked as UTF-8, bytes fields are not" {
 
     // field 14, string, two bytes that are not UTF-8
     const as_text = [_]u8{ 0x72, 0x02, 0xc3, 0x28 };
-    try testing.expectError(error.InvalidUtf8, pb.decodeFromSlice(All, testing.allocator, &as_text, .{}));
+    try testing.expectError(
+        error.InvalidUtf8,
+        pb.decodeFromSlice(All, testing.allocator, &as_text, .{}),
+    );
 
-    var lenient = try pb.decodeFromSlice(All, testing.allocator, &as_text, .{ .validate_utf8 = false });
+    var lenient = try pb.decodeFromSlice(All, testing.allocator, &as_text, .{
+        .validate_utf8 = false,
+    });
     defer lenient.deinit();
     try testing.expectEqualSlices(u8, &invalid, lenient.value.text);
 

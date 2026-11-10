@@ -5,7 +5,7 @@
 default:
     @just --list
 
-[doc("Unit tests")]
+[doc("Unit tests, the protoc interop tests, and the docs examples")]
 [group("test")]
 test:
     zig build test --summary all
@@ -45,9 +45,9 @@ proto:
 [group("lint")]
 lint:
     ziglint
-    zig fmt --check src test bench build.zig build.zig.zon
+    zig fmt --check src test docs/examples bench build.zig build.zig.zon
     nix fmt -- --ci
-    oxfmt --check README.md AGENTS.md .github
+    oxfmt --check README.md AGENTS.md docs/content .github
     actionlint
     zizmor .
     just --fmt --check
@@ -55,9 +55,9 @@ lint:
 [doc("Format everything lint checks")]
 [group("lint")]
 fmt:
-    zig fmt src test bench build.zig build.zig.zon
+    zig fmt src test docs/examples bench build.zig build.zig.zon
     nix fmt
-    oxfmt README.md AGENTS.md .github
+    oxfmt README.md AGENTS.md docs/content .github
     just --fmt
 
 [doc("Everything CI runs")]

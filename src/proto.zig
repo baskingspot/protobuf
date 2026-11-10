@@ -73,7 +73,9 @@ pub const Encoding = enum {
 /// cannot say it. Written as `field(2)`, through a helper for the ambiguous
 /// cases, or as a literal when a rarer knob matters.
 pub const FieldDescriptor = struct {
+    /// Field number, from 1 to 2^29-1.
     number: u32,
+    /// How the bytes are encoded; `.auto` lets the Zig type decide.
     encoding: Encoding = .auto,
     /// Packed repeated encoding, the `.proto` option. `null` means packed for a
     /// numeric field and per element otherwise, which is what proto3 does.
@@ -129,10 +131,15 @@ pub fn Descriptor(comptime T: type) type {
 
 /// A field's type, or the element type of a repeated field.
 pub const Elem = union(enum) {
+    /// A varint or fixed-width numeric value.
     scalar: wire.Scalar,
+    /// An `enum(i32)`.
     @"enum": type,
+    /// A `[]const u8` checked as UTF-8.
     string,
+    /// A `[]const u8` with no encoding check.
     bytes,
+    /// A nested message type.
     message: type,
 };
 
@@ -140,13 +147,17 @@ pub const Elem = union(enum) {
 pub const Field = struct {
     /// The name in the Zig struct, which is this field's name in the table.
     name: [:0]const u8,
+    /// Field number, from 1 to 2^29-1.
     number: u32,
     /// `?T`: the field can be absent, which is not the same as its default.
     optional: bool,
+    /// A slice of elements, written as one tag per element or one packed tag.
     repeated: bool,
+    /// A repeated numeric field written as one packed length-delimited field.
     is_packed: bool,
     /// The Zig type of the struct field.
     type: type,
+    /// What one element of the field is.
     elem: Elem,
 
     /// The wire type the encoder writes for this field.
@@ -156,6 +167,7 @@ pub const Field = struct {
     }
 };
 
+/// The wire type a scalar arrives as.
 pub fn scalarWireType(comptime scalar: wire.Scalar) wire.WireType {
     return switch (scalar) {
         .i32, .i64, .u32, .u64, .sint32, .sint64, .bool => .varint,
@@ -173,6 +185,7 @@ pub fn scalarPacked(comptime scalar: wire.Scalar) wire.Encoding {
     };
 }
 
+/// The wire type an element arrives as.
 pub fn elemWireType(elem: Elem) wire.WireType {
     return switch (elem) {
         .scalar => |s| scalarWireType(s),
@@ -209,11 +222,13 @@ pub fn info(comptime T: type) Info {
 
         for (s.field_names, s.field_types, s.field_attrs, 0..) |name, Ty, attrs, i| {
             if (attrs.@"comptime") {
-                @compileError(@typeName(T) ++ "." ++ name ++ " is a comptime field, which is not a message field");
+                @compileError(@typeName(T) ++ "." ++ name ++
+                    " is a comptime field, which is not a message field");
             }
             if (attrs.defaultValue(Ty) == null) {
                 @compileError(@typeName(T) ++ "." ++ name ++ " needs a default value. " ++
-                    "An absent protobuf field decodes as its default, so the default is part of the schema.");
+                    "An absent protobuf field decodes as its default, " ++
+                    "so the default is part of the schema.");
             }
             fields[i] = normalizeField(T, Ty, name, @field(specs, name));
         }
@@ -274,7 +289,12 @@ fn zero(comptime Ty: type) Ty {
     };
 }
 
-fn normalizeField(comptime T: type, comptime Ty: type, comptime name: [:0]const u8, spec: FieldDescriptor) Field {
+fn normalizeField(
+    comptime T: type,
+    comptime Ty: type,
+    comptime name: [:0]const u8,
+    spec: FieldDescriptor,
+) Field {
     comptime {
         const where = @typeName(T) ++ "." ++ name;
         var E = Ty;
@@ -302,15 +322,20 @@ fn normalizeField(comptime T: type, comptime Ty: type, comptime name: [:0]const 
         }
 
         const elem: Elem = if (is_bytes) switch (spec.encoding) {
-            .auto => @compileError(where ++ " is a []const u8, and the wire cannot tell a string " ++
-                "from bytes. Say pb.string(n) or pb.bytes(n)."),
+            .auto => @compileError(
+                where ++ " is a []const u8, and the wire cannot tell a string " ++
+                    "from bytes. Say pb.string(n) or pb.bytes(n).",
+            ),
             .string => .string,
             .bytes => .bytes,
-            else => @compileError(where ++ " is a []const u8 and cannot use ." ++ @tagName(spec.encoding)),
+            else => @compileError(
+                where ++ " is a []const u8 and cannot use ." ++ @tagName(spec.encoding),
+            ),
         } else resolve(E, where, spec.encoding);
 
         if (optional and repeated) {
-            @compileError(where ++ " is an optional repeated field; protobuf has no presence for repeated fields, " ++
+            @compileError(where ++ " is an optional repeated field; " ++
+                "protobuf has no presence for repeated fields, " ++
                 "and an absent field and an empty one are the same bytes");
         }
 
@@ -321,11 +346,15 @@ fn normalizeField(comptime T: type, comptime Ty: type, comptime name: [:0]const 
         const is_packed = if (repeated)
             spec.@"packed" orelse numeric
         else blk: {
-            if (spec.@"packed" != null) @compileError(where ++ " is not repeated, so it cannot be packed");
+            if (spec.@"packed" != null) {
+                @compileError(where ++ " is not repeated, so it cannot be packed");
+            }
             break :blk false;
         };
         if (is_packed and !numeric) {
-            @compileError(where ++ " is a repeated " ++ @tagName(elem) ++ " field, which cannot be packed");
+            @compileError(
+                where ++ " is a repeated " ++ @tagName(elem) ++ " field, which cannot be packed",
+            );
         }
         if (spec.number < 1 or spec.number > 0x1FFFFFFF) {
             @compileError(where ++ " has field number out of range 1..2^29-1");
@@ -397,22 +426,29 @@ fn resolve(comptime E: type, comptime where: []const u8, comptime encoding: Enco
             break :blk .{ .@"enum" = E };
         },
         .pointer => |p| blk: {
-            if (p.size == .slice and p.child == u8 and p.attrs.@"const" and p.sentinel_ptr == null) {
+            if (p.size == .slice and p.child == u8 and p.attrs.@"const" and
+                p.sentinel_ptr == null)
+            {
                 break :blk switch (encoding) {
-                    .auto => @compileError(where ++ " is a []const u8, and the wire cannot tell a string " ++
-                        "from bytes. Say pb.string(n) or pb.bytes(n)."),
+                    .auto => @compileError(
+                        where ++ " is a []const u8, and the wire cannot tell a string " ++
+                            "from bytes. Say pb.string(n) or pb.bytes(n).",
+                    ),
                     .string => .string,
                     .bytes => .bytes,
                     else => @compileError(badEncoding(where, encoding)),
                 };
             }
-            @compileError(where ++ " is " ++ @typeName(E) ++ ". The only pointer a field can be is []const u8.");
+            @compileError(where ++ " is " ++ @typeName(E) ++
+                ". The only pointer a field can be is []const u8.");
         },
         .@"struct" => blk: {
             if (encoding != .auto) @compileError(where ++ " is a message, which has no encoding");
             break :blk .{ .message = E };
         },
-        else => @compileError(where ++ " is " ++ @typeName(E) ++ ", which the protobuf wire format cannot carry"),
+        else => @compileError(
+            where ++ " is " ++ @typeName(E) ++ ", which the protobuf wire format cannot carry",
+        ),
     };
 }
 

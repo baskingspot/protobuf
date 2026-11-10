@@ -12,6 +12,7 @@ const proto = @import("proto.zig");
 const wire = @import("wire.zig");
 const Writer = @import("Writer.zig");
 
+/// Options for `encode`.
 pub const Options = struct {
     /// Write scalar fields that hold their type's zero value. Proto3 parsers
     /// read an absent field as its zero, so the default writes fewer bytes and
@@ -46,7 +47,11 @@ const Counter = struct {
         self.total += wire.varintLen(tag.encode());
     }
 
-    fn writeScalar(self: *Counter, comptime scalar: wire.Scalar, value: wire.Scalar.Type(scalar)) !void {
+    fn writeScalar(
+        self: *Counter,
+        comptime scalar: wire.Scalar,
+        value: wire.Scalar.Type(scalar),
+    ) !void {
         self.total += wire.scalarLen(scalar, value);
     }
 

@@ -26,8 +26,10 @@ pub const Field = union(enum) {
     len: Len,
     fixed32: Fixed32,
 
+    /// The tag of a `Field` arm.
     pub const Kind = meta.Tag(Field);
 
+    /// The payload type of `kind`.
     pub fn Payload(comptime kind: Kind) type {
         return @FieldType(Field, @tagName(kind));
     }
@@ -63,7 +65,9 @@ pub const Field = union(enum) {
 
     /// Varint field payload.
     pub const Varint = struct {
+        /// The field number from the tag.
         field_number: u32,
+        /// The raw varint bits, before a scalar interpretation.
         value: u64,
 
         /// Interpret as a specific scalar type.
@@ -83,7 +87,9 @@ pub const Field = union(enum) {
 
     /// Fixed64 field payload.
     pub const Fixed64 = struct {
+        /// The field number from the tag.
         field_number: u32,
+        /// The little-endian 64-bit payload.
         value: u64,
 
         /// Interpret as a specific scalar type.
@@ -99,7 +105,9 @@ pub const Field = union(enum) {
 
     /// Fixed32 field payload.
     pub const Fixed32 = struct {
+        /// The field number from the tag.
         field_number: u32,
+        /// The little-endian 32-bit payload.
         value: u32,
 
         /// Interpret as a specific scalar type.
@@ -115,12 +123,17 @@ pub const Field = union(enum) {
 
     /// Length-delimited field payload.
     pub const Len = struct {
+        /// The field number from the tag.
         field_number: u32,
+        /// Payload length in bytes.
         length: usize,
+        /// The stream the payload will be read from.
         io: *Io.Reader,
+        /// The enclosing message, when this field is nested.
         parent: ?*Reader = null,
 
-        /// Read as UTF-8 string into the provided buffer.
+        /// Read as UTF-8 string into the provided buffer. The returned slice
+        /// points into `buf`.
         pub fn string(self: Len, buf: []u8) ![]const u8 {
             const payload = try self.bytes(buf);
             if (!unicode.utf8ValidateSlice(payload)) return Error.InvalidUtf8;
@@ -141,8 +154,9 @@ pub const Field = union(enum) {
         ///
         /// Requires the whole payload to be buffered already, which is true for
         /// a reader over a complete slice and false for a stream whose payload
-        /// is larger than the buffer. Returns `error.NotBuffered` in that case;
-        /// `bytes` is the copying path for any reader.
+        /// is larger than the buffer. Returns `error.NotBuffered` in that case.
+        /// `bytes` copies the payload for any reader. The returned slice is
+        /// valid until the next read from `io`.
         pub fn data(self: Len) ![]const u8 {
             const avail = self.io.buffered();
             if (avail.len < self.length) return Error.NotBuffered;
@@ -152,7 +166,8 @@ pub const Field = union(enum) {
             return dest;
         }
 
-        /// Read raw bytes into the provided buffer.
+        /// Read raw bytes into the provided buffer. The returned slice points
+        /// into `buf`.
         pub fn bytes(self: Len, buf: []u8) ![]u8 {
             if (buf.len < self.length) return Error.BufferTooSmall;
             const dest = buf[0..self.length];
@@ -198,14 +213,20 @@ pub const Field = union(enum) {
             return struct {
                 const Self = @This();
 
+                /// The packed payload, borrowed from the caller's buffer.
                 data: []const u8,
+                /// The next byte to read.
                 pos: usize,
 
+                /// Read the next element, or null at the end of the payload.
                 pub fn next(self: *Self) !?T {
                     switch (encoding) {
                         .varint => {
                             if (self.pos >= self.data.len) return null;
-                            const value, const bytes_read = try decodeVarint(u64, self.data[self.pos..]);
+                            const value, const bytes_read = try decodeVarint(
+                                u64,
+                                self.data[self.pos..],
+                            );
                             self.pos += bytes_read;
                             return switch (T) {
                                 i32 => @bitCast(@as(u32, @truncate(value))),
@@ -213,12 +234,17 @@ pub const Field = union(enum) {
                                 u32 => @truncate(value),
                                 u64 => value,
                                 bool => value != 0,
-                                else => @compileError("varint encoding does not support " ++ @typeName(T)),
+                                else => @compileError(
+                                    "varint encoding does not support " ++ @typeName(T),
+                                ),
                             };
                         },
                         .sint => {
                             if (self.pos >= self.data.len) return null;
-                            const value, const bytes_read = try decodeVarint(u64, self.data[self.pos..]);
+                            const value, const bytes_read = try decodeVarint(
+                                u64,
+                                self.data[self.pos..],
+                            );
                             self.pos += bytes_read;
                             return switch (T) {
                                 i32 => zigzagDecode(u32, @truncate(value)),
@@ -246,9 +272,12 @@ pub const Field = union(enum) {
             return struct {
                 const Self = @This();
 
+                /// The iterator over the allocated payload.
                 iter: PackedIterator(T, encoding),
+                /// The payload buffer, freed by `deinit`.
                 data: []u8,
 
+                /// Free the payload buffer.
                 pub fn deinit(self: *Self, gpa: Allocator) void {
                     gpa.free(self.data);
                     self.* = undefined;
@@ -267,8 +296,10 @@ pub const Field = union(enum) {
             return .{ .data = payload, .pos = 0 };
         }
 
-        /// Read packed repeated field with allocation, returns iterator.
-        /// Call deinit() on the result to free the allocated buffer.
+        /// Read a packed repeated field with allocation.
+        ///
+        /// The result holds the payload and an iterator. Its `deinit` method
+        /// frees the payload.
         pub fn repeatedAlloc(
             self: Len,
             comptime T: type,
@@ -284,14 +315,18 @@ pub const Field = union(enum) {
     };
 };
 
-/// Reads fields from a protobuf-encoded message.
-/// When remaining is set, acts as a bounded reader for nested messages.
+/// Reads fields from a protobuf-encoded message. A reader returned by
+/// `Field.Len.message` is bounded by that field's length.
 const Reader = @This();
 
+/// The stream this reader consumes.
 io: *Io.Reader,
+/// Bytes left in this message, or null for an unbounded reader.
 remaining: ?usize = null,
+/// The enclosing message, for a reader returned by `Field.Len.message`.
 parent: ?*Reader = null,
 
+/// Read from `reader`, with no message bound.
 pub fn init(reader: *Io.Reader) Reader {
     return .{ .io = reader };
 }

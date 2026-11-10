@@ -4,7 +4,7 @@ Working notes for AI coding agents in baskingspot/protobuf.
 
 ## What this is
 
-Protocol Buffers in Zig: a field-by-field reader and writer for the wire format, with no .proto files, no generated code, and caller-owned buffers. It is incubating: unstable, with no promises about its API.
+Protocol Buffers in Zig: the wire format and a typed layer over plain structs, with no .proto files, no generated code, and caller-owned buffers. It is incubating: unstable, with no promises about its API.
 
 ## Environment
 

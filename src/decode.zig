@@ -19,11 +19,14 @@ const Reader = @import("Reader.zig");
 const Field = Reader.Field;
 const wire = @import("wire.zig");
 
+/// Every error a decode can return: the wire errors, allocator failure, and
+/// an enum value with no tag.
 pub const Error = wire.Error || Allocator.Error || error{
     /// A varint held a value the field's enum has no tag for.
     UnknownEnumValue,
 };
 
+/// Options for `decode` and its variants.
 pub const Options = struct {
     /// Reject bytes in a `string` field that are not valid UTF-8. Proto3 says
     /// a `string` is UTF-8, and a `bytes` field is never checked.
@@ -32,9 +35,10 @@ pub const Options = struct {
 
 /// A decoded message and the arena behind it.
 ///
-/// `decodeFromSlice` borrows every string and byte slice from the input, so
-/// that slice must outlive this. `decode` copies them, so the reader may be a
-/// socket or a file and the value owns everything it points at.
+/// `decodeFromSlice` borrows strings and byte slices from the input.
+/// The input must outlive the result. The arena owns repeated-field arrays.
+/// `decode` copies strings and bytes into the arena. Its reader can use a
+/// socket or a file.
 pub fn Parsed(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -42,6 +46,9 @@ pub fn Parsed(comptime T: type) type {
         arena: ArenaAllocator,
         value: T,
 
+        /// Free the arena.
+        ///
+        /// This does not free the input passed to `decodeFromSlice`.
         pub fn deinit(self: *Self) void {
             self.arena.deinit();
             self.* = undefined;
@@ -49,9 +56,15 @@ pub fn Parsed(comptime T: type) type {
     };
 }
 
-/// Decode one message from a reader, copying every string and byte slice into
-/// the arena. The reader may be a socket, a file, or a slice.
-pub fn decode(comptime T: type, gpa: Allocator, reader: *Io.Reader, options: Options) Error!Parsed(T) {
+/// `decode` reads one message and copies strings and bytes into an arena.
+/// The arena also owns repeated-field arrays. The reader can use a socket,
+/// a file, or a slice.
+pub fn decode(
+    comptime T: type,
+    gpa: Allocator,
+    reader: *Io.Reader,
+    options: Options,
+) Error!Parsed(T) {
     var parsed: Parsed(T) = .{ .arena = .init(gpa), .value = undefined };
     errdefer parsed.arena.deinit();
 
@@ -60,17 +73,24 @@ pub fn decode(comptime T: type, gpa: Allocator, reader: *Io.Reader, options: Opt
     return parsed;
 }
 
-/// Decode one message from a reader into memory the caller already owns. The
-/// returned value owns nothing; the allocator has to live as long as the
-/// value, and an arena is the only sane choice.
+/// Decode one message from a reader into memory the caller owns. Strings and
+/// bytes are copied, and repeated fields are allocated, from `gpa`. The value
+/// has no arena and no `deinit`: free the allocations, or pass an arena that
+/// outlives it.
 pub fn decodeLeaky(comptime T: type, gpa: Allocator, reader: *Io.Reader, options: Options) Error!T {
     const ctx: Ctx = .{ .gpa = gpa, .options = options, .copy = true };
     return read(ctx, reader, T);
 }
 
 /// Decode one message from a slice, borrowing every string and byte slice from
-/// it. `bytes` must outlive the value.
-pub fn decodeFromSlice(comptime T: type, gpa: Allocator, bytes: []const u8, options: Options) Error!Parsed(T) {
+/// it. `bytes` must outlive the value. Repeated fields are allocated from the
+/// arena.
+pub fn decodeFromSlice(
+    comptime T: type,
+    gpa: Allocator,
+    bytes: []const u8,
+    options: Options,
+) Error!Parsed(T) {
     var parsed: Parsed(T) = .{ .arena = .init(gpa), .value = undefined };
     errdefer parsed.arena.deinit();
 
@@ -80,8 +100,15 @@ pub fn decodeFromSlice(comptime T: type, gpa: Allocator, bytes: []const u8, opti
     return parsed;
 }
 
-/// The borrowing decode, into memory the caller already owns.
-pub fn decodeFromSliceLeaky(comptime T: type, gpa: Allocator, bytes: []const u8, options: Options) Error!T {
+/// `decodeFromSliceLeaky` borrows strings and bytes from `bytes`.
+/// The input must outlive the value. Repeated-field arrays use `gpa`.
+/// The value has no arena and no `deinit`.
+pub fn decodeFromSliceLeaky(
+    comptime T: type,
+    gpa: Allocator,
+    bytes: []const u8,
+    options: Options,
+) Error!T {
     var io: Io.Reader = .fixed(bytes);
     const ctx: Ctx = .{ .gpa = gpa, .options = options, .copy = false };
     return read(ctx, &io, T);
@@ -127,7 +154,13 @@ fn skip(field: Field) Error!void {
     }
 }
 
-fn readField(ctx: *Ctx, comptime T: type, comptime f: proto.Field, dst: *T, field: Field) Error!void {
+fn readField(
+    ctx: *Ctx,
+    comptime T: type,
+    comptime f: proto.Field,
+    dst: *T,
+    field: Field,
+) Error!void {
     const expected = proto.elemWireType(f.elem);
     const packed_arrival = f.repeated and field.wireType() == .len and expected != .len;
     if (field.wireType() != expected and !packed_arrival) return skip(field);
@@ -160,7 +193,9 @@ fn assignScalar(ctx: *Ctx, comptime elem: proto.Elem, field: Field, out: anytype
         },
         .string, .bytes => {
             const payload = try payloadBytes(ctx, field.expect(.len));
-            if (elem == .string and ctx.options.validate_utf8 and !std.unicode.utf8ValidateSlice(payload)) {
+            if (elem == .string and ctx.options.validate_utf8 and
+                !std.unicode.utf8ValidateSlice(payload))
+            {
                 return error.InvalidUtf8;
             }
             out.* = payload;
@@ -178,7 +213,13 @@ fn readScalar(field: Field, comptime scalar: wire.Scalar) wire.Scalar.Type(scala
     };
 }
 
-fn readRepeated(ctx: *Ctx, comptime T: type, comptime f: proto.Field, dst: *T, field: Field) Error!void {
+fn readRepeated(
+    ctx: *Ctx,
+    comptime T: type,
+    comptime f: proto.Field,
+    dst: *T,
+    field: Field,
+) Error!void {
     const E = FieldElementType(f);
     var list: std.ArrayList(E) = .empty;
     defer list.deinit(ctx.gpa);
@@ -211,7 +252,13 @@ fn appendMessage(ctx: *Ctx, comptime E: type, list: *std.ArrayList(E), field: Fi
     try list.append(ctx.gpa, element);
 }
 
-fn appendOne(ctx: *Ctx, comptime E: type, comptime f: proto.Field, list: *std.ArrayList(E), field: Field) Error!void {
+fn appendOne(
+    ctx: *Ctx,
+    comptime E: type,
+    comptime f: proto.Field,
+    list: *std.ArrayList(E),
+    field: Field,
+) Error!void {
     var element: E = undefined;
     try assignScalar(ctx, f.elem, field, &element);
     try list.append(ctx.gpa, element);

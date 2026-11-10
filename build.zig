@@ -51,6 +51,19 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&run.step);
     }
 
+    // The code the README and guide show. It is a test against the public
+    // module, so a documented call cannot drift away from the API.
+    const examples_mod = b.createModule(.{
+        .root_source_file = b.path("docs/examples/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "protobuf", .module = mod }},
+    });
+    const example_tests = b.addTest(.{ .root_module = examples_mod, .test_runner = runner });
+    const run_example_tests = b.addRunArtifact(example_tests);
+    passthruArgs(b, run_example_tests);
+    test_step.dependOn(&run_example_tests.step);
+
     // Benchmarks. testingx's addBench builds the suite as ReleaseFast.
     if (b.lazyImport(@This(), "testingx")) |testingx_build| {
         const run_bench = testingx_build.addBench(b, .{

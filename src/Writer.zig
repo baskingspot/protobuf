@@ -27,8 +27,10 @@ const zigzagEncode = wire.zigzagEncode;
 /// Builds a protobuf-encoded message by writing to an Io.Writer.
 const Writer = @This();
 
+/// The stream this writer appends to.
 io: *Io.Writer,
 
+/// Write to `writer`.
 pub fn init(writer: *Io.Writer) Writer {
     return .{ .io = writer };
 }

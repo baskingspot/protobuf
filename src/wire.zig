@@ -16,6 +16,7 @@ pub const WireType = enum(u3) {
     // 3 and 4 are deprecated (start/end group)
     fixed32 = 5, // fixed32, sfixed32, float
 
+    /// Format the wire type by name.
     pub fn format(self: WireType, writer: *Io.Writer) Io.Writer.Error!void {
         const value = switch (self) {
             .varint => "VARINT",
@@ -65,16 +66,21 @@ pub fn Signed(comptime T: type) type {
 /// Maximum bytes a varint can occupy (64-bit value).
 pub const max_varint_len: usize = 10;
 
+/// Read a fixed-width integer from a little-endian buffer.
 pub inline fn readInt(comptime T: type, buffer: *const [@divExact(@typeInfo(T).int.bits, 8)]u8) T {
     return std.mem.readInt(T, buffer, .little);
 }
 
-pub inline fn writeInt(comptime T: type, buffer: *[@divExact(@typeInfo(T).int.bits, 8)]u8, value: T) void {
+/// Write a fixed-width integer into a little-endian buffer.
+pub inline fn writeInt(
+    comptime T: type,
+    buffer: *[@divExact(@typeInfo(T).int.bits, 8)]u8,
+    value: T,
+) void {
     return std.mem.writeInt(T, buffer, value, .little);
 }
 
-/// Encode an integer as a varint into a buffer.
-/// Returns the number of bytes written.
+/// Encode an integer as a varint into `buf`. Returns the written slice.
 pub fn encodeVarint(comptime T: type, value: T, buf: []u8) ![]const u8 {
     var v: Unsigned(T) = @bitCast(value);
 
@@ -218,8 +224,11 @@ pub fn zigzagDecode(comptime T: type, value: T) Signed(T) {
     return @bitCast(shifted ^ mask);
 }
 
+/// A field number and wire type, the two halves of a protobuf tag.
 pub const Tag = struct {
+    /// The field number, from 1 to 2^29-1.
     field_number: u32,
+    /// The wire type that decides the payload encoding.
     wire_type: WireType,
 
     /// Create a tag from field number and wire type.
@@ -306,8 +315,12 @@ pub const Scalar = enum {
 
 /// Encoding type for packed repeated fields.
 pub const Encoding = enum {
+    /// Varint, for `int32`, `int64`, `uint32`, `uint64`, `bool`, and enums.
     varint,
+    /// Zigzag varint, for `sint32` and `sint64`.
     sint,
+    /// Little-endian fixed width, for `fixed32`, `sfixed32`, `float`, and the
+    /// 64-bit forms.
     fixed,
 };
 

@@ -147,12 +147,55 @@ fn matches(comptime proto_name: []const u8, name: []const u8) bool {
         std.mem.eql(u8, comptime jsonName(proto_name), name);
 }
 
+/// Two fields whose JSON names collide would make one of them unreachable:
+/// `user_id` and `userId` both answer to `userId`.
+fn assertDistinctNames(comptime T: type) void {
+    comptime {
+        @setEvalBranchQuota(10_000);
+        const fields = proto.info(T).fields;
+        for (fields, 0..) |a, i| {
+            for (fields[i + 1 ..]) |b| {
+                if (std.mem.eql(u8, jsonName(a.name), jsonName(b.name))) {
+                    @compileError(@typeName(T) ++ "." ++ a.name ++ " and " ++ b.name ++
+                        " both answer to the JSON name " ++ jsonName(a.name));
+                }
+            }
+            switch (a.elem) {
+                .oneof => |U| {
+                    const cases = proto.variants(U).fields;
+                    for (cases, 0..) |c, ci| {
+                        // A case shares the object with every field, and with
+                        // its own siblings.
+                        for (fields) |other| {
+                            if (other.number != 0 and
+                                std.mem.eql(u8, jsonName(c.name), jsonName(other.name)))
+                            {
+                                @compileError(@typeName(U) ++ "." ++ c.name ++
+                                    " and " ++ @typeName(T) ++ "." ++ other.name ++
+                                    " both answer to the JSON name " ++ jsonName(c.name));
+                            }
+                        }
+                        for (cases[ci + 1 ..]) |d| {
+                            if (std.mem.eql(u8, jsonName(c.name), jsonName(d.name))) {
+                                @compileError(@typeName(U) ++ "." ++ c.name ++ " and " ++ d.name ++
+                                    " both answer to the JSON name " ++ jsonName(c.name));
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+}
+
 const Encoder = struct {
     io: *Io.Writer,
     options: Options,
 
     fn message(e: *Encoder, T: type, v: T) !void {
         if (comptime wkt.form(T)) |form| return e.special(T, form, v);
+        comptime assertDistinctNames(T);
 
         const fields = comptime proto.info(T).fields;
         try e.io.writeByte('{');
@@ -723,11 +766,11 @@ const test_Inner = struct {
 const test_Pick = union(enum) {
     pub const protobuf: proto.Variants(@This()) = .{
         .number = proto.field(20),
-        .text = proto.string(21),
+        .note = proto.string(21),
     };
 
     number: i32,
-    text: []const u8,
+    note: []const u8,
 };
 
 const test_Msg = struct {

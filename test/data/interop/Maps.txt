@@ -1,0 +1,5 @@
+# proto: interop/interop.proto
+# type: interop.Maps
+by_id { key: 1 value: "one" }
+by_id { key: 2 value: "two" }
+nodes { key: "a" value { n: 1 label: "first" } }

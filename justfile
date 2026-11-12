@@ -62,6 +62,15 @@ proto:
     } > fixtures.txtar
     echo "wrote test/data/fixtures.txtar"
 
+[doc("Regenerate test/data/json.txtar with google.protobuf's json_format, the reference proto3 JSON printer")]
+[group("test")]
+protojson:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    python3 test/data/protojson.py > test/data/json.txtar.tmp
+    mv test/data/json.txtar.tmp test/data/json.txtar
+    echo "wrote test/data/json.txtar"
+
 [doc("Lint Zig, Nix, Markdown, the workflows, and this justfile: ziglint, zig fmt, nix fmt, oxfmt, actionlint, zizmor, and just --fmt")]
 [group("lint")]
 lint:

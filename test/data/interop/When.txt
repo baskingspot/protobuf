@@ -1,0 +1,8 @@
+# proto: interop/interop.proto
+# type: interop.When
+when { seconds: 1712320496 nanos: 500000000 }
+how_long { seconds: -3 nanos: -500000000 }
+count { value: 5 }
+raw { value: "\373\377" }
+mask { paths: "user_id" paths: "display_name" }
+nothing {}

@@ -44,14 +44,16 @@ pub const Event = struct {
         .prev_kv = pb.field(3),
     };
 
+    /// A case name is what JSON writes for the value, so it is the `.proto`
+    /// name. The wire carries the number.
     pub const EventType = enum(i32) {
-        put = 0,
-        delete = 1,
+        PUT = 0,
+        DELETE = 1,
     };
 
     /// `type` is a Zig keyword, so the field is quoted. The table names the
     /// field by its Zig name, so `@"type"` is the whole cost.
-    type: EventType = .put,
+    type: EventType = .PUT,
     kv: ?KeyValue = null,
     prev_kv: ?KeyValue = null,
 };
@@ -91,15 +93,15 @@ pub const RangeRequest = struct {
         .max_create_revision = pb.field(13),
     };
 
-    pub const SortOrder = enum(i32) { none = 0, ascend = 1, descend = 2 };
-    pub const SortTarget = enum(i32) { key = 0, version = 1, create = 2, mod = 3, value = 4 };
+    pub const SortOrder = enum(i32) { NONE = 0, ASCEND = 1, DESCEND = 2 };
+    pub const SortTarget = enum(i32) { KEY = 0, VERSION = 1, CREATE = 2, MOD = 3, VALUE = 4 };
 
     key: []const u8 = "",
     range_end: []const u8 = "",
     limit: i64 = 0,
     revision: i64 = 0,
-    sort_order: SortOrder = .none,
-    sort_target: SortTarget = .key,
+    sort_order: SortOrder = .NONE,
+    sort_target: SortTarget = .KEY,
     serializable: bool = false,
     keys_only: bool = false,
     count_only: bool = false,
@@ -176,6 +178,12 @@ pub const WatchResponse = struct {
 const fixtures = testingx.fixtures(@embedFile("data/fixtures.txtar"));
 const range_golden = fixtures.hex("etcd/RangeResponse.pb");
 
+/// JSON written by google.protobuf's `json_format` over the same text-format
+/// messages, so the two encodings come from two reference implementations.
+/// `just protojson` regenerates it.
+const json_fixtures = testingx.fixtures(@embedFile("data/json.txtar"));
+const json_eql = @import("json_fixtures.zig");
+
 test "decode a RangeResponse protoc wrote" {
     var parsed = try pb.decodeFromSlice(RangeResponse, testing.allocator, range_golden, .{});
     defer parsed.deinit();
@@ -219,8 +227,8 @@ test "encode a RangeRequest the way protoc does" {
         .range_end = "fop",
         .limit = 10,
         .revision = 42,
-        .sort_order = .descend,
-        .sort_target = .mod,
+        .sort_order = .DESCEND,
+        .sort_target = .MOD,
         .serializable = true,
         .keys_only = true,
         .min_mod_revision = 5,
@@ -250,13 +258,13 @@ test "decode a WatchResponse with events" {
     try testing.expectEqual(2, response.events.len);
 
     const put = response.events[0];
-    try testing.expectEqual(Event.EventType.put, put.type);
+    try testing.expectEqual(Event.EventType.PUT, put.type);
     try testing.expectEqualStrings("/registry/nodes/a", put.kv.?.key);
     try testing.expectEqual(5, put.kv.?.lease);
     try testing.expect(put.prev_kv == null);
 
     const delete = response.events[1];
-    try testing.expectEqual(Event.EventType.delete, delete.type);
+    try testing.expectEqual(Event.EventType.DELETE, delete.type);
     try testing.expectEqual(88, delete.kv.?.mod_revision);
     try testing.expectEqualStrings("bye", delete.prev_kv.?.value);
     try testing.expectEqual(3, delete.prev_kv.?.version);
@@ -352,4 +360,28 @@ test "an Unknown field keeps what the schema does not have" {
     defer again.deinit();
     try testing.expectEqual(@as(usize, 2), again.value.unknown.records.len);
     try testing.expectEqual(@as(u64, 42), again.value.unknown.records[0].varint.value);
+}
+
+test "the JSON fixture decodes to the bytes protoc wrote" {
+    // Two reference implementations, one message: the JSON printer's output
+    // goes through this decoder and this encoder, and has to come out as the
+    // bytes protoc made from the same text-format source.
+    var parsed = try pb.json.decode(
+        RangeRequest,
+        json_fixtures.get("etcd/RangeRequest.json"),
+        .{},
+        testing.allocator,
+    );
+    defer parsed.deinit();
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try pb.encode(RangeRequest, parsed.value, .{}, &out.writer);
+    try testing.expectEqualSlices(u8, fixtures.hex("etcd/RangeRequest.pb"), out.written());
+
+    // And the JSON this layer writes says the same thing as the reference's.
+    var json: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer json.deinit();
+    try pb.json.encode(RangeRequest, parsed.value, .{}, &json.writer);
+    try json_eql.expectSame(json_fixtures.get("etcd/RangeRequest.json"), json.written());
 }

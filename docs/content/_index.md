@@ -291,9 +291,11 @@ themselves, which this layer cannot express.
 The tests compare against JSON that `google.protobuf`'s `json_format` wrote, so
 the oracle is the reference implementation and not this package's idea of it.
 `just protojson` regenerates `test/data/json.txtar` from the same text-format
-messages that `just proto` gives to protoc. Each fixture pair therefore
-describes one message in two encodings from two implementations, and the tests
-check that both decode to the same value.
+messages that `just proto` gives to protoc. A fixture pair therefore describes
+one message in two encodings from two implementations, and the tests check that
+both describe the same message: the JSON decodes to a value that encodes to
+protoc's bytes, or the value this layer writes is the JSON the reference
+printer wrote.
 
 The comparison is structural: member order and whitespace carry no meaning in
 JSON, so neither is compared. A map written in another order is the same map.

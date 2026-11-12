@@ -2,6 +2,12 @@ syntax = "proto3";
 
 package interop;
 
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+
 // Every wire shape the typed layer claims to support, in one message. The
 // fixtures beside this file are `protoc --encode` output over it, so the tests
 // compare against a real protobuf implementation, not against this library.
@@ -55,4 +61,21 @@ message Choice {
     Inner detail = 6;
   }
   int32 after = 7;
+}
+
+// The well-known types. JSON gives each of these a form of its own, so the
+// fixture beside this file is what pins that form.
+message When {
+  google.protobuf.Timestamp when = 1;
+  google.protobuf.Duration how_long = 2;
+  google.protobuf.Int32Value count = 3;
+  google.protobuf.BytesValue raw = 4;
+  google.protobuf.FieldMask mask = 5;
+  google.protobuf.Empty nothing = 6;
+}
+
+// A map is a JSON object and a repeated entry message on the wire.
+message Maps {
+  map<int32, string> by_id = 1;
+  map<string, Inner> nodes = 2;
 }

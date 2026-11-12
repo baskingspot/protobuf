@@ -31,7 +31,13 @@
 
             # Project-specific tools. protobuf provides protoc, which is the
             # source of truth for the wire fixtures under test/data.
-            packages = with pkgs; [ protobuf ];
+            # json_format in python's protobuf is the source of truth for the
+            # proto3 JSON fixtures; no other JSON implementation is in the
+            # tree, so this is what keeps that mapping honest.
+            packages = with pkgs; [
+              protobuf
+              (python3.withPackages (ps: [ ps.protobuf ]))
+            ];
           };
         };
     };

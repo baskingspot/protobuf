@@ -5,6 +5,10 @@
 //! `protoc --encode=interop.All` over them, and `just proto` regenerates it.
 //! These tests encode the same values and expect those bytes, decode those
 //! bytes and expect those values, and re-encode to the same bytes.
+//!
+//! The JSON beside it, in `data/json.txtar`, is the same set of messages as
+//! `google.protobuf`'s `json_format` prints them, so the JSON side of each
+//! message is checked against the reference implementation too.
 
 const std = @import("std");
 const testing = std.testing;
@@ -12,10 +16,11 @@ const testing = std.testing;
 const pb = @import("protobuf");
 const testingx = @import("testingx");
 
+/// A case name is what JSON writes for the value, so it is the `.proto` name.
 const EnumKind = enum(i32) {
-    unknown = 0,
-    first = 1,
-    second = 2,
+    UNKNOWN = 0,
+    FIRST = 1,
+    SECOND = 2,
 };
 
 const Inner = struct {
@@ -31,8 +36,8 @@ const Inner = struct {
 /// Fields are declared in field-number order, because that is the order they
 /// are written in, and `protoc` writes in number order too. Re-encoding has to
 /// match byte for byte.
-/// A `map<string, int64>` is a repeated message with field 1 as the key and
-/// field 2 as the value. There is no map on the wire, so there is none here.
+/// A `map<string, int64>`: a repeated message with field 1 as the key and
+/// field 2 as the value. The wire form is that entry list; JSON is one object.
 const AttrsEntry = struct {
     pub const protobuf: pb.Descriptor(@This()) = .{
         .key = pb.string(1),
@@ -68,7 +73,7 @@ const All = struct {
         .words = pb.string(22),
         .items = pb.field(23),
         .kind = pb.field(24),
-        .attrs = pb.field(25),
+        .attrs = pb.map(25),
         .high = pb.field(2047),
         .higher = pb.field(16384),
     };
@@ -95,7 +100,7 @@ const All = struct {
     unpacked_i32: []const i32 = &.{},
     words: []const []const u8 = &.{},
     items: []const Inner = &.{},
-    kind: EnumKind = .unknown,
+    kind: EnumKind = .UNKNOWN,
     attrs: []const AttrsEntry = &.{},
     high: i32 = 0,
     higher: u32 = 0,
@@ -127,8 +132,64 @@ const Choice = struct {
     after: i32 = 0,
 };
 
+/// A map with an integer key and one with a message value.
+const Maps = struct {
+    pub const ById = struct {
+        pub const protobuf: pb.Descriptor(@This()) = .{
+            .key = pb.field(1),
+            .value = pb.string(2),
+        };
+
+        key: i32 = 0,
+        value: []const u8 = "",
+    };
+
+    pub const Node = struct {
+        pub const protobuf: pb.Descriptor(@This()) = .{
+            .key = pb.string(1),
+            .value = pb.field(2),
+        };
+
+        key: []const u8 = "",
+        value: Inner = .{},
+    };
+
+    pub const protobuf: pb.Descriptor(@This()) = .{
+        .by_id = pb.map(1),
+        .nodes = pb.map(2),
+    };
+
+    by_id: []const ById = &.{},
+    nodes: []const Node = &.{},
+};
+
+/// The well-known types, each with a JSON form of its own.
+const When = struct {
+    pub const protobuf: pb.Descriptor(@This()) = .{
+        .when = pb.field(1),
+        .how_long = pb.field(2),
+        .count = pb.field(3),
+        .raw = pb.field(4),
+        .mask = pb.field(5),
+        .nothing = pb.field(6),
+    };
+
+    when: ?pb.wkt.Timestamp = null,
+    how_long: ?pb.wkt.Duration = null,
+    count: ?pb.wkt.Int32Value = null,
+    raw: ?pb.wkt.BytesValue = null,
+    mask: ?pb.wkt.FieldMask = null,
+    nothing: ?pb.wkt.Empty = null,
+};
+
 const fixtures = testingx.fixtures(@embedFile("data/fixtures.txtar"));
 const golden = fixtures.hex("interop/All.pb");
+
+/// JSON written by google.protobuf's `json_format`, the reference printer,
+/// over the same text-format messages that protoc turned into the binary
+/// fixtures. `just protojson` regenerates it.
+const json_fixtures = testingx.fixtures(@embedFile("data/json.txtar"));
+const json_eql = @import("json_fixtures.zig");
 
 fn sample() All {
     return .{
@@ -154,7 +215,7 @@ fn sample() All {
         .unpacked_i32 = &.{ 5, 6 },
         .words = &.{ "a", "", "ccc" },
         .items = &.{ .{ .n = 1, .label = "one" }, .{ .n = 2, .label = "two" } },
-        .kind = .second,
+        .kind = .SECOND,
         .attrs = &.{
             .{ .key = "a", .value = 1 },
             .{ .key = "b", .value = 2 },
@@ -545,4 +606,100 @@ test "an unknown number inside a oneof is not a case" {
     };
     const parsed = try pb.decodeFromSliceLeaky(Choice, testing.allocator, &bytes, .{});
     try testing.expectEqual(@as(i32, 7), parsed.pick.?.number);
+}
+
+/// The JSON fixture next to a binary one describes the same message, so both
+/// decoders must land on the same value. Rather than compare two structs field
+/// by field, this checks the two paths that matter: the fixture parses into
+/// this layer and writes back the same JSON, and this layer writes the JSON the
+/// reference printer wrote.
+fn expectSameJson(comptime T: type, comptime name: []const u8, value: T) !void {
+    const reference = json_fixtures.get(name);
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try pb.json.encode(T, value, .{}, &out.writer);
+    try json_eql.expectSame(reference, out.written());
+
+    var parsed = try pb.json.decode(T, reference, .{}, testing.allocator);
+    defer parsed.deinit();
+    var again: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer again.deinit();
+    try pb.json.encode(T, parsed.value, .{}, &again.writer);
+    try json_eql.expectSame(reference, again.written());
+}
+
+test "the reference JSON printer and this layer agree" {
+    try expectSameJson(All, "interop/All.json", sample());
+    try expectSameJson(Choice, "interop/Choice.json", .{
+        .before = 11,
+        .pick = .{ .name = "picked" },
+        .after = 22,
+    });
+    try expectSameJson(Maps, "interop/Maps.json", .{
+        .by_id = &.{
+            .{ .key = 1, .value = "one" },
+            .{ .key = 2, .value = "two" },
+        },
+        .nodes = &.{.{ .key = "a", .value = .{ .n = 1, .label = "first" } }},
+    });
+    try expectSameJson(When, "interop/When.json", .{
+        .when = .{ .seconds = 1_712_320_496, .nanos = 500_000_000 },
+        .how_long = .{ .seconds = -3, .nanos = -500_000_000 },
+        .count = .{ .value = 5 },
+        .raw = .{ .value = &.{ 0xfb, 0xff } },
+        .mask = .{ .paths = &.{ "user_id", "display_name" } },
+        .nothing = .{},
+    });
+}
+
+test "the JSON fixture and the protoc fixture are the same message" {
+    // Pick has no map, so the two encodings pin one value with no ordering
+    // question between them.
+    const bytes = fixtures.hex("interop/When.pb");
+    var parsed = try pb.json.decode(
+        When,
+        json_fixtures.get("interop/When.json"),
+        .{},
+        testing.allocator,
+    );
+    defer parsed.deinit();
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try pb.encode(When, parsed.value, .{}, &out.writer);
+    try testing.expectEqualSlices(u8, bytes, out.written());
+}
+
+test "a map is a JSON object and an entry list on the wire" {
+    const maps: Maps = .{
+        .by_id = &.{
+            .{ .key = 1, .value = "one" },
+            .{ .key = 2, .value = "two" },
+        },
+        .nodes = &.{.{ .key = "a", .value = .{ .n = 1, .label = "first" } }},
+    };
+
+    // The wire form is what protoc wrote for the same message.
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try pb.encode(Maps, maps, .{}, &out.writer);
+    try testing.expectEqualSlices(u8, fixtures.hex("interop/Maps.pb"), out.written());
+
+    // An integer key is a member name in quotes, and a message value is an
+    // object.
+    var json: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer json.deinit();
+    try pb.json.encode(Maps, maps, .{}, &json.writer);
+    try testing.expectEqualStrings(
+        "{\"byId\":{\"1\":\"one\",\"2\":\"two\"},\"nodes\":{\"a\":{\"n\":1,\"label\":\"first\"}}}",
+        json.written(),
+    );
+
+    var parsed = try pb.json.decode(Maps, json.written(), .{}, testing.allocator);
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 2), parsed.value.by_id.len);
+    try testing.expectEqual(@as(i32, 2), parsed.value.by_id[1].key);
+    try testing.expectEqualStrings("two", parsed.value.by_id[1].value);
+    try testing.expectEqualStrings("first", parsed.value.nodes[0].value.label);
 }

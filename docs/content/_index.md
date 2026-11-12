@@ -15,6 +15,7 @@ its field numbers in a `Descriptor(@This())` table.
 - [Typed messages](#typed-messages): `Descriptor(@This())` maps Zig fields to wire numbers for `encode` and `decode`.
 - [Ownership](#ownership): `Parsed.deinit` frees decoded allocations, while slice-based decoders borrow string and byte data.
 - [Encoding options](#encoding-options): `EncodeOptions` controls default values, and `DecodeOptions` controls UTF-8 checks.
+- [Limits](#limits): group wire types are `error.InvalidWireType`, there is no `.proto` parser or code generation, and maps stay repeated entry messages.
 
 The [public namespace](https://github.com/baskingspot/protobuf/blob/main/src/root.zig)
 links the API declarations and their contracts.

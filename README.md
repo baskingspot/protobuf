@@ -1,4 +1,9 @@
-<h1>protobuf</h1>
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/static/logo-dark.svg">
+    <img src="docs/static/logo.svg" alt="protobuf" height="48">
+  </picture>
+</h1>
 
 Protocol Buffers in Zig: the wire format, and a typed layer over plain structs.
 
@@ -63,6 +68,8 @@ Import it as `const pb = @import("protobuf");`. `protobuf` builds with Zig 0.17.
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
+The logo files in `docs/static/` are baskingspot marks
+and are not covered by it. See `docs/static/LICENSE`.
 
 ## How it's made
 

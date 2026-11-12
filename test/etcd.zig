@@ -208,7 +208,7 @@ test "re-encode a RangeResponse byte for byte" {
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try pb.encode(parsed.value, .{}, &out.writer);
+    try pb.encode(RangeResponse, parsed.value, .{}, &out.writer);
 
     try testing.expectEqualSlices(u8, range_golden, out.written());
 }
@@ -230,9 +230,9 @@ test "encode a RangeRequest the way protoc does" {
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try pb.encode(request, .{}, &out.writer);
+    try pb.encode(RangeRequest, request, .{}, &out.writer);
     try testing.expectEqualSlices(u8, golden, out.written());
-    try testing.expectEqual(golden.len, pb.encodedSize(request, .{}));
+    try testing.expectEqual(golden.len, pb.encodedSize(RangeRequest, request, .{}));
 }
 
 const watch_golden = fixtures.hex("etcd/WatchResponse.pb");
@@ -268,14 +268,14 @@ test "re-encode a WatchResponse byte for byte" {
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try pb.encode(parsed.value, .{}, &out.writer);
+    try pb.encode(WatchResponse, parsed.value, .{}, &out.writer);
 
     try testing.expectEqualSlices(u8, watch_golden, out.written());
 }
 
 test "an empty message is zero bytes and decodes to defaults" {
     const request: PutRequest = .{};
-    try testing.expectEqual(0, pb.encodedSize(request, .{}));
+    try testing.expectEqual(0, pb.encodedSize(PutRequest, request, .{}));
 
     var parsed = try pb.decodeFromSlice(PutRequest, testing.allocator, &.{}, .{});
     defer parsed.deinit();

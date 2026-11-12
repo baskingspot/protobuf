@@ -101,15 +101,15 @@ const Person = struct {
 };
 ```
 
-`encode(value, options, writer)` writes the message through `Writer`.
-`encodedSize(value, options)` returns the exact byte count without output.
+`encode(T, value, options, writer)` writes the message through `Writer`.
+`encodedSize(T, value, options)` returns the exact byte count without output.
 The [typed example](../examples/typed.zig) compares those bytes with explicit
 field writes and checks the size.
 
 ```zig
 var out: std.Io.Writer.Allocating = .init(gpa);
 defer out.deinit();
-try pb.encode(Person{ .id = 150, .name = "Ada" }, .{}, &out.writer);
+try pb.encode(Person, .{ .id = 150, .name = "Ada" }, .{}, &out.writer);
 var parsed = try pb.decodeFromSlice(Person, gpa, out.written(), .{});
 defer parsed.deinit();
 ```

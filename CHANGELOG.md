@@ -5,6 +5,13 @@ All notable changes to protobuf are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `encode` and `encodedSize` name the message type instead of inferring it:
+  `pb.encode(T, value, options, writer)` and
+  `pb.encodedSize(T, value, options)`. Existing call sites add the type as
+  the first argument.
+
 ### Added
 
 - `pb.decodeBorrowed(T, bytes, options)`: decode a message whose strings and

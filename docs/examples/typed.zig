@@ -22,8 +22,8 @@ test "encode, size, and decode a struct" {
 
     var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer out.deinit();
-    try pb.encode(person, .{}, &out.writer);
-    try std.testing.expectEqual(out.written().len, pb.encodedSize(person, .{}));
+    try pb.encode(Person, person, .{}, &out.writer);
+    try std.testing.expectEqual(out.written().len, pb.encodedSize(Person, person, .{}));
 
     var storage: [32]u8 = undefined;
     var io: std.Io.Writer = .fixed(&storage);

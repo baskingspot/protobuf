@@ -22,15 +22,15 @@ pub const Options = struct {
 
 /// Encode a message into `writer`. `T` must be a message: a struct with a
 /// `pub const protobuf` table.
-pub fn encode(value: anytype, options: Options, writer: *Io.Writer) !void {
+pub fn encode(comptime T: type, value: T, options: Options, writer: *Io.Writer) !void {
     var w: Writer = .init(writer);
-    try message(&w, @TypeOf(value), value, options);
+    try message(&w, T, value, options);
 }
 
 /// Bytes `encode` would write for this value.
-pub fn encodedSize(value: anytype, options: Options) usize {
+pub fn encodedSize(comptime T: type, value: T, options: Options) usize {
     var counter: Counter = .{};
-    message(&counter, @TypeOf(value), value, options) catch unreachable;
+    message(&counter, T, value, options) catch unreachable;
     return counter.total;
 }
 

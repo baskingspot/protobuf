@@ -142,10 +142,10 @@ fn sample() All {
 test "encode matches protoc" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try pb.encode(sample(), .{}, &out.writer);
+    try pb.encode(All, sample(), .{}, &out.writer);
 
     try testing.expectEqualSlices(u8, golden, out.written());
-    try testing.expectEqual(golden.len, pb.encodedSize(sample(), .{}));
+    try testing.expectEqual(golden.len, pb.encodedSize(All, sample(), .{}));
 }
 
 test "decode what protoc wrote" {
@@ -195,7 +195,7 @@ test "re-encode what protoc wrote" {
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try pb.encode(parsed.value, .{}, &out.writer);
+    try pb.encode(All, parsed.value, .{}, &out.writer);
     try testing.expectEqualSlices(u8, golden, out.written());
 }
 
@@ -214,7 +214,7 @@ test "a map entry decodes, and its zero value is not written back" {
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try pb.encode(parsed.value, .{}, &out.writer);
+    try pb.encode(All, parsed.value, .{}, &out.writer);
     try testing.expectEqualSlices(u8, &.{ 0xca, 0x01, 0x03, 0x0a, 0x01, 'c' }, out.written());
 
     // Which decodes back to the same entry.
@@ -269,7 +269,7 @@ test "editions change the encoding policy, not the wire" {
     // so re-encoding reproduces protoc's bytes exactly.
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try pb.encode(parsed.value, .{}, &out.writer);
+    try pb.encode(Editions, parsed.value, .{}, &out.writer);
     try testing.expectEqualSlices(u8, &from_protoc, out.written());
 }
 
@@ -321,7 +321,7 @@ test "decodeBorrowed borrows strings and nested messages, allocating nothing" {
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try pb.encode(Flat{ .text = "hi", .inner = .{ .n = 7, .label = "in" } }, .{}, &out.writer);
+    try pb.encode(Flat, .{ .text = "hi", .inner = .{ .n = 7, .label = "in" } }, .{}, &out.writer);
     const bytes = out.written();
 
     const got = try pb.decodeBorrowed(Flat, bytes, .{});
@@ -394,7 +394,7 @@ test "duplicate fields: last one wins for a scalar, messages merge" {
 
 test "write_defaults writes the zero values too" {
     const zeros: Inner = .{};
-    try testing.expectEqual(0, pb.encodedSize(zeros, .{}));
+    try testing.expectEqual(0, pb.encodedSize(Inner, zeros, .{}));
     // n = 0 and label = "" are two tags and nothing else.
-    try testing.expectEqual(4, pb.encodedSize(zeros, .{ .write_defaults = true }));
+    try testing.expectEqual(4, pb.encodedSize(Inner, zeros, .{ .write_defaults = true }));
 }

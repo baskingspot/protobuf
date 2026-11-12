@@ -7,6 +7,9 @@ All notable changes to protobuf are recorded here. The format follows
 
 ### Added
 
+- `pb.map(n)`: marks a repeated entry message as a `map<K, V>`. The binary
+  encoding does not change; JSON writes it as one object instead of a list of
+  entries, which is what the protobuf JSON mapping requires.
 - `pb.json`: `encode`, `decode`, and `decodeLeaky`, the proto3 JSON mapping over
   the same `Descriptor` table. 64-bit integers are strings, `bytes` is base64,
   an enum is its case name, a field name is lowerCamelCase in the output and

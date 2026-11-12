@@ -221,6 +221,7 @@ const Encoder = struct {
         if (comptime f.repeated) {
             if (v.len == 0) return;
             try e.key(f.name, first);
+            if (comptime f.is_map) return e.map(f, v);
             return e.array(f, v);
         }
         if (!encode_mod.isDefault(v)) {
@@ -273,6 +274,35 @@ const Encoder = struct {
             try e.value(f.elem, element);
         }
         try e.io.writeByte(']');
+    }
+
+    /// A map is one JSON object, not a list of entries: the reference mapping
+    /// says so, and a peer that expects an object reads a list as a type
+    /// error.
+    fn map(e: *Encoder, comptime f: proto.Field, values: []const proto.ElemType(f.elem)) !void {
+        const E = proto.ElemType(f.elem);
+        const kv = comptime proto.mapFields(E);
+        try e.io.writeByte('{');
+        for (values, 0..) |entry, i| {
+            if (i != 0) try e.io.writeByte(',');
+            try e.mapKey(kv.key, @field(entry, kv.key.name));
+            try e.io.writeByte(':');
+            try e.value(kv.value.elem, @field(entry, kv.value.name));
+        }
+        try e.io.writeByte('}');
+    }
+
+    /// A member name is always a JSON string, so an integer key is its
+    /// digits in quotes.
+    fn mapKey(e: *Encoder, comptime k: proto.Field, v: proto.ElemType(k.elem)) !void {
+        switch (k.elem) {
+            .string => try std.json.Stringify.value(v, .{}, e.io),
+            .scalar => |s| switch (s) {
+                .bool => try e.io.writeAll(if (v) "\"true\"" else "\"false\""),
+                else => try e.io.print("\"{d}\"", .{v}),
+            },
+            else => unreachable,
+        }
     }
 
     fn scalar(e: *Encoder, comptime s: wire.Scalar, v: wire.Scalar.Type(s)) !void {
@@ -444,13 +474,63 @@ const Decoder = struct {
             _ = try d.next();
             return;
         }
-        if (comptime f.repeated) return d.readArray(f, dst);
+        if (comptime f.repeated) {
+            if (comptime f.is_map) return d.readMap(f, dst);
+            return d.readArray(f, dst);
+        }
         if (comptime f.optional) {
             const E = @typeInfo(f.type).optional.child;
             dst.* = try d.element(E, f.elem);
             return;
         }
         dst.* = try d.element(proto.ElemType(f.elem), f.elem);
+    }
+
+    fn readMap(d: *Decoder, comptime f: proto.Field, dst: *f.type) Error!void {
+        if (try d.scanner.peekNextTokenType() != .object_begin) return error.UnexpectedToken;
+        _ = try d.next();
+
+        const E = proto.ElemType(f.elem);
+        const kv = comptime proto.mapFields(E);
+        var list: std.ArrayList(E) = .empty;
+        defer list.deinit(d.gpa);
+        while (true) {
+            const tok = try d.next();
+            const text: []const u8 = switch (tok) {
+                .object_end => break,
+                .string, .allocated_string => |s| s,
+                else => return error.UnexpectedToken,
+            };
+            defer d.freeToken(tok);
+
+            var entry: E = proto.init(E);
+            @field(entry, kv.key.name) = try d.mapKeyValue(kv.key, text);
+            const V = proto.ElemType(kv.value.elem);
+            @field(entry, kv.value.name) = try d.element(V, kv.value.elem);
+            try list.append(d.gpa, entry);
+        }
+        dst.* = try list.toOwnedSlice(d.gpa);
+    }
+
+    fn mapKeyValue(
+        d: *Decoder,
+        comptime k: proto.Field,
+        text: []const u8,
+    ) Error!proto.ElemType(k.elem) {
+        const E = proto.ElemType(k.elem);
+        return switch (k.elem) {
+            .string => try d.gpa.dupe(u8, text),
+            .scalar => |s| switch (s) {
+                .bool => if (std.mem.eql(u8, text, "true"))
+                    true
+                else if (std.mem.eql(u8, text, "false"))
+                    false
+                else
+                    return error.InvalidValue,
+                else => std.fmt.parseInt(E, text, 10) catch return error.InvalidValue,
+            },
+            else => unreachable,
+        };
     }
 
     fn readArray(d: *Decoder, comptime f: proto.Field, dst: *f.type) Error!void {
@@ -944,6 +1024,65 @@ test "a string is escaped and a slash is not" {
     var parsed = try decode(test_Msg, out.written(), .{}, std.testing.allocator);
     defer parsed.deinit();
     try std.testing.expectEqualStrings("a\"b\\c\td\u{1F600}", parsed.value.text);
+}
+
+test "a map is an object, and an integer key is a quoted member name" {
+    const ById = struct {
+        pub const protobuf: proto.Descriptor(@This()) = .{
+            .key = proto.field(1),
+            .value = proto.string(2),
+        };
+
+        key: i32 = 0,
+        value: []const u8 = "",
+    };
+
+    const Named = struct {
+        pub const protobuf: proto.Descriptor(@This()) = .{
+            .key = proto.string(1),
+            .value = proto.field(2),
+        };
+
+        key: []const u8 = "",
+        value: test_Inner = .{},
+    };
+
+    const Msg = struct {
+        pub const protobuf: proto.Descriptor(@This()) = .{
+            .by_id = proto.map(1),
+            .named = proto.map(2),
+        };
+
+        by_id: []const ById = &.{},
+        named: []const Named = &.{},
+    };
+
+    const value: Msg = .{
+        .by_id = &.{ .{ .key = 2, .value = "two" }, .{ .key = 10, .value = "ten" } },
+        .named = &.{.{ .key = "a", .value = .{ .n = 1, .label = "first" } }},
+    };
+
+    var out: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try encode(Msg, value, .{}, &out.writer);
+    try std.testing.expectEqualStrings(
+        "{\"byId\":{\"2\":\"two\",\"10\":\"ten\"},\"named\":{\"a\":{\"n\":1,\"label\":\"first\"}}}",
+        out.written(),
+    );
+
+    var parsed = try decode(Msg, out.written(), .{}, std.testing.allocator);
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 2), parsed.value.by_id.len);
+    try std.testing.expectEqual(@as(i32, 10), parsed.value.by_id[1].key);
+    try std.testing.expectEqualStrings("ten", parsed.value.by_id[1].value);
+    try std.testing.expectEqualStrings("a", parsed.value.named[0].key);
+    try std.testing.expectEqualStrings("first", parsed.value.named[0].value.label);
+
+    // A member name that is not a number is not a key of an integer map.
+    try std.testing.expectError(
+        error.InvalidValue,
+        decode(Msg, "{\"byId\":{\"one\":\"x\"}}", .{}, std.testing.allocator),
+    );
 }
 
 test "the well-known types have their own forms" {

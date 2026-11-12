@@ -124,6 +124,31 @@ The wire format has no message delimiter. `decode` reads until the reader ends.
 A persistent stream adds a length before each message. Refer to
 [Message streams](#message-streams).
 
+## Maps
+
+A map is a repeated entry message: the key in field 1 and the value in field 2.
+The field is a slice of that entry, and `pb.map` marks it.
+
+```zig
+const Entry = struct {
+    pub const protobuf: pb.Descriptor(@This()) = .{ .key = pb.string(1), .value = pb.field(2) };
+
+    key: []const u8 = "",
+    value: i64 = 0,
+};
+
+const Item = struct {
+    pub const protobuf: pb.Descriptor(@This()) = .{ .attrs = pb.map(25) };
+
+    attrs: []const Entry = &.{},
+};
+```
+
+The binary encoding is the entry list, which is what the wire format carries.
+JSON writes the same field as one object, which is what the mapping requires.
+The slice stays a slice because protobuf leaves the entry order unspecified, so
+a caller that needs a lookup structure builds it from the slice.
+
 # Oneofs
 
 A oneof sets one case at a time. The Zig field is `?U`, where `U` is a
@@ -216,9 +241,11 @@ The rules that this follows:
   a string for both.
 - `bytes` is standard base64. The parser also accepts the URL-safe alphabet
   and missing padding.
-- An enum is the name of its case. The parser accepts a number as well. A
-  number with no member is `error.UnknownEnumTag`, the same as the binary
-  decoder.
+- An enum is the name of its case, so declare the cases with the `.proto`
+  names: `FIRST`, not `first`. The parser accepts a number as well. A number
+  with no member is `error.UnknownEnumTag`, the same as the binary decoder.
+- A `pb.map` field is one JSON object, with each key as a member name. An
+  integer key is its digits in quotes, and a message value is an object.
 - A `float` that is not a number is one of the strings `"NaN"`, `"Infinity"`,
   and `"-Infinity"`.
 - A field with no presence that holds its default value is not written. A oneof
@@ -259,9 +286,21 @@ snake_case paths of the message.
 `Any` needs a registry from a type URL to a message, and the other three hold
 themselves, which this layer cannot express.
 
-The tests check the mapping against JSON written by hand. There is no reference
-JSON implementation in the tree, so a mapping that the tests check is not the
-same as a conformance run.
+## The fixtures
+
+The tests compare against JSON that `google.protobuf`'s `json_format` wrote, so
+the oracle is the reference implementation and not this package's idea of it.
+`just protojson` regenerates `test/data/json.txtar` from the same text-format
+messages that `just proto` gives to protoc. Each fixture pair therefore
+describes one message in two encodings from two implementations, and the tests
+check that both decode to the same value.
+
+The comparison is structural: member order and whitespace carry no meaning in
+JSON, so neither is compared. A map written in another order is the same map.
+
+This is not the conformance suite. The upstream suite covers cases that this
+layer does not claim: `Any`, `Struct`, and `Value`, editions, and the exact
+treatment of a duplicate key.
 
 # Message streams
 
@@ -337,5 +376,5 @@ Group wire types return `error.InvalidWireType`, so an unknown group field is
 an error and not an `Unknown` record. The package does not parse `.proto` files
 or generate Zig types.
 
-Maps use repeated entry messages. Each entry places its key in field 1 and its
-value in field 2. There is no separate map helper.
+No `.proto` parser, no code generation, no groups, no extensions, and no
+`Any`, `Struct`, or `Value`. A text-format reader and writer are also absent.

@@ -29,6 +29,7 @@ The project is incubating. Its pre-1.0 API is unstable.
 
 - [Wire format](docs/content/_index.md#wire-format): `Writer` emits individual fields, and `Reader.next` returns each field from an input reader.
 - [Typed messages](docs/content/_index.md#typed-messages): `Descriptor(@This())` maps Zig fields to wire numbers for `encode` and `decode`.
+- [Maps](docs/content/_index.md#maps): a map is an entry list on the wire and `pb.map` marks it, which is what JSON needs.
 - [Oneofs](docs/content/_index.md#oneofs): a `?U` field sets one union case at a time, with `pb.Variants` naming the wheel.
 - [Unknown fields](docs/content/_index.md#unknown-fields): a `pb.Unknown` field keeps the fields the table does not declare, so a re-encode writes them back.
 - [JSON](docs/content/_index.md#json): `pb.json` reads and writes the proto3 JSON mapping, and `pb.wkt` gives the well-known types their own forms.
@@ -39,7 +40,7 @@ The project is incubating. Its pre-1.0 API is unstable.
 Not implemented:
 
 - Group wire types return `error.InvalidWireType`.
-- Map helpers. Maps use repeated entry messages, with the key in field 1 and the value in field 2.
+- A text-format reader or writer.
 - `google.protobuf.Any`, `Struct`, `Value`, and `ListValue`. `Any` needs a type
   registry, and the other three hold themselves.
 

@@ -23,9 +23,8 @@
 //! wrong type. `info` adds what a type cannot say: unique field numbers, a
 //! default for every field, and field types the wire format can carry.
 //!
-//! There is no map type, and that is deliberate. On the wire `map<K, V>` is a
-//! repeated message with the key in field 1 and the value in field 2, so a map
-//! field is a slice of that message:
+//! A map is a repeated entry message, because that is what the wire carries:
+//! the key in field 1 and the value in field 2, one entry per pair.
 //!
 //! ```zig
 //! const Entry = struct {
@@ -37,17 +36,13 @@
 //! attrs: []const Entry = &.{},
 //! ```
 //!
-//! An editions schema's features are table entries, because they only change
-//! how fields are encoded, never the wire format: `field_presence` EXPLICIT is
-//! `?T` and IMPLICIT is a plain field, `repeated_field_encoding` EXPANDED is
-//! `unpacked`, `enum_type` CLOSED is an exhaustive enum, and `utf8_validation`
-//! NONE is `bytes` instead of `string`. `message_encoding` DELIMITED is the one
-//! feature with no entry: it puts a field in a group, and this reader rejects
-//! the group wire types.
+//! `pb.map(25)` says the same list is a map, which is what JSON needs: the
+//! mapping writes a map as one object, and an entry list with no marker is a
+//! list of objects. The binary encoding does not change.
 //!
-//! A hash map would also give up the one thing that makes map output stable:
-//! protobuf leaves the entry order unspecified, and a slice keeps it in the
-//! caller's hands. Build a lookup structure from the slice if you need one.
+//! The slice stays a slice rather than becoming a hash map, because protobuf
+//! leaves the entry order unspecified and a slice keeps it in the caller's
+//! hands. Build a lookup structure from the slice if you need one.
 
 const std = @import("std");
 const wire = @import("wire.zig");
@@ -85,6 +80,8 @@ pub const FieldDescriptor = struct {
     /// numeric field and per element otherwise, which is what proto3 does.
     /// The name is quoted because `packed` is a Zig keyword.
     @"packed": ?bool = null,
+    /// A repeated entry message that JSON writes as an object: `pb.map(n)`.
+    map: bool = false,
 };
 
 /// A field whose Zig type says everything: `int32` for an `i32`, `uint32` for
@@ -119,6 +116,28 @@ pub fn fixed(number: u32) FieldDescriptor {
 /// A repeated numeric field written one element per tag, as proto2 does.
 pub fn unpacked(number: u32) FieldDescriptor {
     return .{ .number = number, .@"packed" = false };
+}
+
+/// A `map<K, V>` field. On the wire a map is a repeated entry message with the
+/// key in field 1 and the value in field 2, and `encode` writes exactly that.
+/// JSON is where a map differs: the reference mapping writes it as one object,
+/// with each key as a member name, so the entry list needs to say it is a map.
+///
+/// The element type is a two-field struct at numbers 1 and 2:
+///
+/// ```zig
+/// const Entry = struct {
+///     pub const protobuf: Descriptor(@This()) = .{ .key = string(1), .value = field(2) };
+///     key: []const u8 = "",
+///     value: i64 = 0,
+/// };
+/// // map<string, int64> attrs = 25;
+/// attrs: []const Entry = &.{},
+/// ```
+///
+/// A key is a string, an integer, or a bool. A value is any singular field.
+pub fn map(number: u32) FieldDescriptor {
+    return .{ .number = number, .map = true };
 }
 
 /// A oneof: one field of the message is set at a time, and each case has its
@@ -300,6 +319,8 @@ pub const Field = struct {
     repeated: bool,
     /// A repeated numeric field written as one packed length-delimited field.
     is_packed: bool,
+    /// A repeated entry message that JSON writes as an object: `pb.map(n)`.
+    is_map: bool,
     /// The Zig type of the struct field.
     type: type,
     /// What one element of the field is.
@@ -491,9 +512,59 @@ fn normalizeOneof(
             .optional = true,
             .repeated = false,
             .is_packed = false,
+            .is_map = false,
             .type = Ty,
             .elem = .{ .oneof = E },
         };
+    }
+}
+
+/// The key and value of a map entry message: the fields at numbers 1 and 2.
+/// The checks are what the format allows, and they run when the table is read,
+/// so a wrong entry type fails at the message, not at the JSON call that
+/// reaches it.
+pub fn mapFields(comptime E: type) struct { key: Field, value: Field } {
+    comptime {
+        const fields = info(E).fields;
+        var key: ?Field = null;
+        var value: ?Field = null;
+        for (fields) |f| {
+            if (f.number == 1) key = f else if (f.number == 2) value = f else {
+                @compileError(@typeName(E) ++ "." ++ f.name ++
+                    " is field " ++ std.fmt.comptimePrint("{d}", .{f.number}) ++
+                    ", and a map entry holds only a key at 1 and a value at 2");
+            }
+        }
+        if (key == null or value == null) {
+            @compileError(@typeName(E) ++ " is a map entry, so it needs a field at number 1 " ++
+                "and a field at number 2");
+        }
+
+        const k = key.?;
+        switch (k.elem) {
+            .string => {},
+            .scalar => |s| switch (s) {
+                .float, .double => @compileError(@typeName(E) ++ "." ++ k.name ++
+                    " is a float, and a map key cannot be one"),
+                else => {},
+            },
+            else => @compileError(@typeName(E) ++ "." ++ k.name ++
+                " is not a string, an integer, or a bool, which are the map key types"),
+        }
+
+        const v = value.?;
+        if (v.repeated) {
+            @compileError(@typeName(E) ++ "." ++ v.name ++
+                " is repeated, and a map value is singular");
+        }
+        if (v.is_map) {
+            @compileError(@typeName(E) ++ "." ++ v.name ++ " is a map, and a map value is not one");
+        }
+        if (v.optional) {
+            @compileError(@typeName(E) ++ "." ++ v.name ++
+                " is optional, and a map value has no presence of its own");
+        }
+        return .{ .key = k, .value = v };
     }
 }
 
@@ -624,12 +695,29 @@ fn normalizeField(
             @compileError(where ++ " has field number out of range 1..2^29-1");
         }
 
+        if (spec.map) {
+            if (!repeated) {
+                @compileError(where ++ " is not repeated, and a map is a repeated entry message");
+            }
+            if (elem != .message) {
+                @compileError(where ++ " is a map, so it must be a repeated message type: " ++
+                    "the entry with a key in field 1 and a value in field 2");
+            }
+            if (spec.@"packed" != null) {
+                @compileError(where ++ " is a map, and a map entry is never packed");
+            }
+            _ = mapFields(elem.message);
+        } else if (elem == .message) {
+            // Nothing to do: the message check below catches a bad element.
+        }
+
         return .{
             .name = name,
             .number = spec.number,
             .optional = optional,
             .repeated = repeated,
             .is_packed = is_packed,
+            .is_map = spec.map,
             .type = Ty,
             .elem = elem,
         };

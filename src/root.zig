@@ -55,6 +55,8 @@ pub const fixed = proto.fixed;
 pub const unpacked = proto.unpacked;
 /// Reads one field at a time from an `Io.Reader`.
 pub const Reader = @import("Reader.zig");
+/// Back-to-back messages on one stream: a varint length, then that many bytes.
+pub const delimited = @import("delimited.zig");
 /// One field from `Reader.next`.
 pub const Field = Reader.Field;
 /// The wire primitives: varints, zigzag, tags, and scalar types.

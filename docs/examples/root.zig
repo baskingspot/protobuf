@@ -6,5 +6,6 @@
 test {
     _ = @import("wire.zig");
     _ = @import("typed.zig");
+    _ = @import("delimited.zig");
     _ = @import("ownership.zig");
 }

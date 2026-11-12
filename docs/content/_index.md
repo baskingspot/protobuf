@@ -13,6 +13,7 @@ its field numbers in a `Descriptor(@This())` table.
 
 - [Wire format](#wire-format): `Writer` emits individual fields, and `Reader.next` returns each field from an input reader.
 - [Typed messages](#typed-messages): `Descriptor(@This())` maps Zig fields to wire numbers for `encode` and `decode`.
+- [Message streams](#message-streams): `pb.delimited` writes and reads the length prefix that separates back-to-back messages.
 - [Ownership](#ownership): `Parsed.deinit` frees decoded allocations, while slice-based decoders borrow string and byte data.
 - [Encoding options](#encoding-options): `EncodeOptions` controls default values, and `DecodeOptions` controls UTF-8 checks.
 - [Limits](#limits): group wire types are `error.InvalidWireType`, there is no `.proto` parser or code generation, and maps stay repeated entry messages.
@@ -117,7 +118,48 @@ defer parsed.deinit();
 ```
 
 The wire format has no message delimiter. `decode` reads until the reader ends.
-For a persistent stream, the caller supplies a reader for exactly one message.
+A persistent stream adds a length before each message. Refer to
+[Message streams](#message-streams).
+
+# Message streams
+
+A message carries no length of its own, so a stream of messages writes a
+varint length before each one. `pb.delimited` writes and reads that framing.
+
+`pb.delimited.encode(T, value, options, writer)` writes the length and then the
+message. `pb.delimited.writeBytes(writer, bytes)` writes bytes that are already
+encoded.
+
+```zig
+var out: std.Io.Writer.Allocating = .init(gpa);
+defer out.deinit();
+try pb.delimited.encode(Person, .{ .id = 150 }, .{}, &out.writer);
+```
+
+`pb.delimited.Reader.next` returns the next frame as a `Frame`, or `null` at a
+clean end of stream. `Frame.fields` returns a `Reader` bounded to that message,
+so field reads stop at the end of the frame and never enter the next one.
+
+```zig
+var input: std.Io.Reader = .fixed(out.written());
+var frames: pb.delimited.Reader = .init(&input);
+while (try frames.next()) |frame| {
+    while (try frame.fields().next()) |field| {
+        // One field of this message.
+        _ = field;
+    }
+}
+```
+
+`Frame.rest` returns the whole frame, borrowed from the reader buffer.
+`Frame.readAll(buf)` copies it. `Frame.drain` skips the rest of it. The next
+call to `next` skips the unread part of the current frame, so a caller does not
+have to read a frame to its end.
+
+A stream that ends in the middle of a length, or a length with no payload
+behind it, returns `error.Truncated`. The
+[stream example](https://github.com/baskingspot/protobuf/blob/main/docs/examples/delimited.zig)
+writes two messages and reads them back.
 
 # Ownership
 

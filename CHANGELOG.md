@@ -5,6 +5,12 @@ All notable changes to protobuf are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `pb.delimited`: `encode`, `writeBytes`, and `Reader`, the varint length prefix
+  that separates back-to-back messages on one stream. `Frame.fields` bounds a
+  field reader to one message, and `Frame.rest` returns the whole frame.
+
 ## [0.2.0] - 2026-11-12
 
 ### Changed

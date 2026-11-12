@@ -7,6 +7,7 @@ test {
     _ = @import("wire.zig");
     _ = @import("typed.zig");
     _ = @import("oneof.zig");
+    _ = @import("json.zig");
     _ = @import("delimited.zig");
     _ = @import("ownership.zig");
 }

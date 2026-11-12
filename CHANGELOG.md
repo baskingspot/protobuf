@@ -7,6 +7,15 @@ All notable changes to protobuf are recorded here. The format follows
 
 ### Added
 
+- `pb.json`: `encode`, `decode`, and `decodeLeaky`, the proto3 JSON mapping over
+  the same `Descriptor` table. 64-bit integers are strings, `bytes` is base64,
+  an enum is its case name, a field name is lowerCamelCase in the output and
+  both spellings are accepted in the input. An unknown key is
+  `error.UnknownField` unless `Options.ignore_unknown_fields` is set.
+- `pb.wkt`: `Timestamp`, `Duration`, the nine wrapper types, `FieldMask`, and
+  `Empty`, each with the JSON form that the mapping gives it: an RFC 3339
+  string, `"3.5s"`, a bare value, a comma-separated path list, and `{}`.
+  `Any`, `Struct`, `Value`, and `ListValue` are not included.
 - `pb.oneof()` and `pb.Variants(T)`: a oneof is a `?U` field where `U` is a
   `union(enum)` with a case table. Each case has its own field number, a decode
   keeps the last case on the wire, and a case set to its zero value is still

@@ -41,6 +41,11 @@ pub const proto = @import("proto.zig");
 pub const Descriptor = proto.Descriptor;
 /// One entry in that table.
 pub const FieldDescriptor = proto.FieldDescriptor;
+/// The proto3 JSON mapping of a message: one `Descriptor`, two encodings.
+pub const json = @import("json.zig");
+/// The well-known types: timestamps, durations, wrappers, field masks, and
+/// the empty message.
+pub const wkt = @import("wkt.zig");
 /// Fields the decoder did not recognize, kept so a re-encode writes them back.
 pub const Unknown = proto.Unknown;
 /// A field whose Zig type says everything: `pb.field(2)`.

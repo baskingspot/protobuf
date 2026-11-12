@@ -15,6 +15,7 @@ its field numbers in a `Descriptor(@This())` table.
 - [Typed messages](#typed-messages): `Descriptor(@This())` maps Zig fields to wire numbers for `encode` and `decode`.
 - [Oneofs](#oneofs): a `?U` field sets one union case at a time, and each case carries its own number.
 - [Unknown fields](#unknown-fields): a field typed `pb.Unknown` keeps the fields the table does not declare, and `encode` writes them back.
+- [JSON](#json): `pb.json` writes and reads the proto3 JSON mapping, with the well-known types in their own forms.
 - [Message streams](#message-streams): `pb.delimited` writes and reads the length prefix that separates back-to-back messages.
 - [Ownership](#ownership): `Parsed.deinit` frees decoded allocations, while slice-based decoders borrow string and byte data.
 - [Encoding options](#encoding-options): `EncodeOptions` controls default values, and `DecodeOptions` controls UTF-8 checks.
@@ -191,6 +192,76 @@ meaning in the format, so a round trip can move a field.
 
 A record array needs an allocator, so a message with an `Unknown` field cannot
 use `decodeBorrowed`. Use `decodeFromSliceLeaky` instead.
+
+# JSON
+
+`pb.json` reads and writes the proto3 JSON mapping. The same `Descriptor` table
+drives both encodings, so a message has one schema and two forms.
+
+```zig
+var out: std.Io.Writer.Allocating = .init(gpa);
+defer out.deinit();
+try pb.json.encode(Person, person, .{}, &out.writer);
+
+var parsed = try pb.json.decode(Person, out.written(), .{}, gpa);
+defer parsed.deinit();
+```
+
+The rules that this follows:
+
+- A field name is lowerCamelCase in the output. The parser accepts that name
+  and the original Zig name.
+- A 64-bit integer is a JSON string, because a JSON number stops counting
+  exactly at 2^53. A 32-bit integer is a number. The parser accepts a number or
+  a string for both.
+- `bytes` is standard base64. The parser also accepts the URL-safe alphabet
+  and missing padding.
+- An enum is the name of its case. The parser accepts a number as well. A
+  number with no member is `error.UnknownEnumTag`, the same as the binary
+  decoder.
+- A `float` that is not a number is one of the strings `"NaN"`, `"Infinity"`,
+  and `"-Infinity"`.
+- A field with no presence that holds its default value is not written. A oneof
+  case is written even when its value is zero, because the tag is the presence.
+- An object key that no field claims is `error.UnknownField`. Set
+  `pb.json.Options.ignore_unknown_fields` to skip it instead.
+- A `null` value leaves its field unset.
+
+`Options.use_proto_names` writes the Zig field names instead of the camelCase
+names. The parser accepts both spellings whatever this option says.
+
+The decoder copies every string and array into an arena, so `pb.json` has no
+borrowing form: the scanner's string is only valid until the next token.
+`decodeLeaky` allocates from the allocator that you pass.
+
+[`docs/examples/json.zig`](https://github.com/baskingspot/protobuf/blob/main/docs/examples/json.zig)
+writes a message and reads it back.
+
+## Well-known types
+
+A well-known type has a form of its own, and `pb.wkt` holds the ones that are
+plain messages:
+
+| Type                                              | JSON                         |
+| ------------------------------------------------- | ---------------------------- |
+| `pb.wkt.Timestamp`                                | `"2024-04-05T12:34:56.500Z"` |
+| `pb.wkt.Duration`                                 | `"3.500s"`                   |
+| `pb.wkt.Int32Value`, and the eight other wrappers | the bare value: `5`, `"abc"` |
+| `pb.wkt.FieldMask`                                | `"userId,displayName"`       |
+| `pb.wkt.Empty`                                    | `{}`                         |
+
+A timestamp is always written in UTC, and a fraction has three, six, or nine
+digits: the fewest that name the value. A duration keeps the sign of both
+halves. A field mask converts between the camelCase paths of JSON and the
+snake_case paths of the message.
+
+`google.protobuf.Any`, `Struct`, `Value`, and `ListValue` are not in `pb.wkt`.
+`Any` needs a registry from a type URL to a message, and the other three hold
+themselves, which this layer cannot express.
+
+The tests check the mapping against JSON written by hand. There is no reference
+JSON implementation in the tree, so a mapping that the tests check is not the
+same as a conformance run.
 
 # Message streams
 

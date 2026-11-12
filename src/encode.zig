@@ -207,8 +207,10 @@ fn messageIsDefault(value: anytype) bool {
     return true;
 }
 
-/// Whether a field holds the value protobuf treats as absent.
-fn isDefault(value: anytype) bool {
+/// Whether a field holds the value protobuf treats as absent. The JSON encoder
+/// applies the same test: a field with no presence and a default value says
+/// nothing, in either encoding.
+pub fn isDefault(value: anytype) bool {
     const T = @TypeOf(value);
     return switch (@typeInfo(T)) {
         .bool => !value,

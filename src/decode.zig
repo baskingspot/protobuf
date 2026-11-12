@@ -124,11 +124,7 @@ pub fn decodeFromSliceLeaky(
 pub fn decodeBorrowed(comptime T: type, bytes: []const u8, options: Options) Error!T {
     comptime assertNoRepeated(T, "decodeBorrowed: " ++ @typeName(T));
     var io: Io.Reader = .fixed(bytes);
-    // The walk above says this message never asks the allocator for anything.
-    // This one cannot answer, so a case the walk missed fails loudly here
-    // instead of allocating quietly in a caller that promised not to.
-    var none: std.heap.FixedBufferAllocator = .init(&.{});
-    const ctx: Ctx = .{ .gpa = none.allocator(), .options = options, .copy = false };
+    const ctx: Ctx = .{ .gpa = no_allocator, .options = options, .copy = false };
     return read(ctx, &io, T);
 }
 
@@ -150,6 +146,25 @@ fn assertNoRepeated(comptime T: type, comptime where: []const u8) void {
         }
     }
 }
+
+/// An allocator that refuses every request.
+///
+/// A message that passed `assertNoRepeated` never asks for memory, so
+/// `decodeBorrowed` gives its `Ctx` this instead of a real allocator. A path
+/// that asks anyway fails with `error.OutOfMemory`, in the error set it
+/// already has, rather than taking memory a caller did not provide.
+///
+/// `Allocator` documents that `ptr` may be `undefined` when an allocator has no
+/// state, and that comparing it is illegal.
+const no_allocator: Allocator = .{
+    .ptr = undefined,
+    .vtable = &.{
+        .alloc = Allocator.noAlloc,
+        .resize = Allocator.noResize,
+        .remap = Allocator.noRemap,
+        .free = Allocator.noFree,
+    },
+};
 
 fn read(ctx: Ctx, io: *Io.Reader, comptime T: type) Error!T {
     var local = ctx;
@@ -216,29 +231,29 @@ fn readField(
         return;
     }
 
-    try assignScalar(ctx, f.elem, field, &@field(dst, f.name));
+    @field(dst, f.name) = try scalarValue(ctx, f.elem, field);
 }
 
-/// Read one value of `elem` and store it, letting an optional field take it
-/// through the coercion.
-fn assignScalar(ctx: *Ctx, comptime elem: proto.Elem, field: Field, out: anytype) Error!void {
-    switch (elem) {
-        .scalar => |scalar| out.* = readScalar(field, scalar),
-        .@"enum" => |E| {
+/// Read one value of `elem`. An optional field takes it through the coercion
+/// at the assignment above.
+fn scalarValue(ctx: *Ctx, comptime elem: proto.Elem, field: Field) Error!proto.ElemType(elem) {
+    return switch (elem) {
+        .scalar => |scalar| readScalar(field, scalar),
+        .@"enum" => |E| blk: {
             const tag = field.expect(.varint).as(.i32);
-            out.* = std.enums.fromInt(E, tag) orelse return Error.UnknownEnumValue;
+            break :blk std.enums.fromInt(E, tag) orelse return Error.UnknownEnumValue;
         },
-        .string, .bytes => {
+        .string, .bytes => blk: {
             const payload = try payloadBytes(ctx, field.expect(.len));
             if (elem == .string and ctx.options.validate_utf8 and
                 !std.unicode.utf8ValidateSlice(payload))
             {
                 return error.InvalidUtf8;
             }
-            out.* = payload;
+            break :blk payload;
         },
         .message => unreachable,
-    }
+    };
 }
 
 fn readScalar(field: Field, comptime scalar: wire.Scalar) wire.Scalar.Type(scalar) {
@@ -257,7 +272,7 @@ fn readRepeated(
     dst: *T,
     field: Field,
 ) Error!void {
-    const E = FieldElementType(f);
+    const E = proto.ElemType(f.elem);
     var list: std.ArrayList(E) = .empty;
     defer list.deinit(ctx.gpa);
     // Seed from what earlier occurrences of this field already put here.
@@ -296,8 +311,7 @@ fn appendOne(
     list: *std.ArrayList(E),
     field: Field,
 ) Error!void {
-    var element: E = undefined;
-    try assignScalar(ctx, f.elem, field, &element);
+    const element = try scalarValue(ctx, f.elem, field);
     try list.append(ctx.gpa, element);
 }
 
@@ -320,15 +334,6 @@ fn appendPacked(
 /// source.
 fn payloadBytes(ctx: *Ctx, len: Field.Len) Error![]const u8 {
     return if (ctx.copy) len.bytesAlloc(ctx.gpa) else len.data();
-}
-
-fn FieldElementType(comptime f: proto.Field) type {
-    return switch (f.elem) {
-        .scalar => |s| wire.Scalar.Type(s),
-        .@"enum" => |E| E,
-        .string, .bytes => []const u8,
-        .message => |M| M,
-    };
 }
 
 fn packedEncoding(comptime elem: proto.Elem) wire.Encoding {

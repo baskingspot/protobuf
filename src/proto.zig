@@ -167,6 +167,17 @@ pub const Field = struct {
     }
 };
 
+/// The Zig type of one element of `elem`. A singular field is a value of this
+/// type, a repeated field is a slice of it, and a `?T` field wraps it.
+pub fn ElemType(comptime elem: Elem) type {
+    return switch (elem) {
+        .scalar => |s| wire.Scalar.Type(s),
+        .@"enum" => |E| E,
+        .string, .bytes => []const u8,
+        .message => |M| M,
+    };
+}
+
 /// The wire type a scalar arrives as.
 pub fn scalarWireType(comptime scalar: wire.Scalar) wire.WireType {
     return switch (scalar) {

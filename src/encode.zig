@@ -71,8 +71,8 @@ fn message(sink: anytype, comptime T: type, value: T, options: Options) !void {
     }
 }
 
-fn emit(sink: anytype, comptime f: proto.Field, value: anytype, options: Options) !void {
-    if (comptime @typeInfo(@TypeOf(value)) == .optional) {
+fn emit(sink: anytype, comptime f: proto.Field, value: f.type, options: Options) !void {
+    if (comptime f.optional) {
         if (value) |present| try single(sink, f, present, options);
         return;
     }
@@ -83,12 +83,22 @@ fn emit(sink: anytype, comptime f: proto.Field, value: anytype, options: Options
 
 /// One tag and one payload: a singular field, or one element of an unpacked
 /// repeated field.
-fn single(sink: anytype, comptime f: proto.Field, value: anytype, options: Options) !void {
+fn single(
+    sink: anytype,
+    comptime f: proto.Field,
+    value: proto.ElemType(f.elem),
+    options: Options,
+) !void {
     try sink.writeTag(.{ .field_number = f.number, .wire_type = proto.elemWireType(f.elem) });
     try payload(sink, f.elem, value, options);
 }
 
-fn repeated(sink: anytype, comptime f: proto.Field, values: anytype, options: Options) !void {
+fn repeated(
+    sink: anytype,
+    comptime f: proto.Field,
+    values: []const proto.ElemType(f.elem),
+    options: Options,
+) !void {
     if (comptime !f.is_packed) {
         for (values) |element| try single(sink, f, element, options);
         return;
@@ -108,7 +118,12 @@ fn repeated(sink: anytype, comptime f: proto.Field, values: anytype, options: Op
 }
 
 /// The bytes of one value, with no tag.
-fn payload(sink: anytype, comptime elem: proto.Elem, value: anytype, options: Options) !void {
+fn payload(
+    sink: anytype,
+    comptime elem: proto.Elem,
+    value: proto.ElemType(elem),
+    options: Options,
+) !void {
     switch (elem) {
         .scalar => |scalar| try sink.writeScalar(scalar, value),
         .@"enum" => try sink.writeScalar(.i32, @backingInt(value)),

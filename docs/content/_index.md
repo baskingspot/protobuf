@@ -13,6 +13,7 @@ its field numbers in a `Descriptor(@This())` table.
 
 - [Wire format](#wire-format): `Writer` emits individual fields, and `Reader.next` returns each field from an input reader.
 - [Typed messages](#typed-messages): `Descriptor(@This())` maps Zig fields to wire numbers for `encode` and `decode`.
+- [Oneofs](#oneofs): a `?U` field sets one union case at a time, and each case carries its own number.
 - [Unknown fields](#unknown-fields): a field typed `pb.Unknown` keeps the fields the table does not declare, and `encode` writes them back.
 - [Message streams](#message-streams): `pb.delimited` writes and reads the length prefix that separates back-to-back messages.
 - [Ownership](#ownership): `Parsed.deinit` frees decoded allocations, while slice-based decoders borrow string and byte data.
@@ -121,6 +122,46 @@ defer parsed.deinit();
 The wire format has no message delimiter. `decode` reads until the reader ends.
 A persistent stream adds a length before each message. Refer to
 [Message streams](#message-streams).
+
+# Oneofs
+
+A oneof sets one case at a time. The Zig field is `?U`, where `U` is a
+`union(enum)` that declares a field number for each case.
+
+```zig
+const Pick = union(enum) {
+    pub const protobuf: pb.Variants(@This()) = .{
+        .number = pb.field(2),
+        .name = pb.string(3),
+    };
+
+    number: i32,
+    name: []const u8,
+};
+
+const Reply = struct {
+    pub const protobuf: pb.Descriptor(@This()) = .{ .pick = pb.oneof() };
+
+    pick: ?Pick = null,
+};
+```
+
+`pb.Variants(@This())` is the case table. It does the job `Descriptor` does for
+a message: the compiler checks that every case has an entry and that no other
+name is present. `pb.oneof()` marks the field, and the field has no number of
+its own.
+
+A decode reads the case that the wire carried and replaces the case before it.
+The last case on the wire wins. `null` means that the message carried no case.
+
+An encode writes the case that is set, and writes nothing for `null`. A case is
+written even when its value is the type's zero: the tag is the presence, so
+`.number = 0` and `null` are different messages.
+
+A case is singular and has no optional wrapper, because the union tag is its
+presence. Both are compile errors, as is a oneof inside a oneof. The
+[oneof example](https://github.com/baskingspot/protobuf/blob/main/docs/examples/oneof.zig)
+checks the last case on the wire and a case that holds zero.
 
 # Unknown fields
 

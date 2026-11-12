@@ -192,7 +192,9 @@ fn readMessage(ctx: *Ctx, r: *Reader, comptime T: type, dst: *T) Error!void {
     while (try r.next()) |field| {
         var claimed = false;
         inline for (fields) |f| {
-            if (field.fieldNumber() == f.number) {
+            if (comptime f.elem == .oneof) {
+                if (try readOneof(ctx, T, f, dst, field)) claimed = true;
+            } else if (field.fieldNumber() == f.number) {
                 claimed = true;
                 if (!try readField(ctx, T, f, dst, field)) {
                     try captureUnknown(ctx, T, dst, field);
@@ -244,6 +246,42 @@ fn unknownRecord(ctx: *Ctx, field: Field) Error!proto.Unknown.Record {
             .bytes = try payloadBytes(ctx, f),
         } },
     };
+}
+
+/// Read one case of a oneof. Returns false when the number is not a case, or
+/// is a case with a wire type it does not take, so the caller keeps the field
+/// as unknown data instead of guessing.
+fn readOneof(
+    ctx: *Ctx,
+    comptime T: type,
+    comptime f: proto.Field,
+    dst: *T,
+    field: Field,
+) Error!bool {
+    const U = f.elem.oneof;
+    inline for (comptime proto.variants(U).fields) |v| {
+        if (field.fieldNumber() == v.number) {
+            if (field.wireType() != proto.elemWireType(v.elem)) return false;
+            // The last case on the wire wins, and the tag replaces the case
+            // that was set before it.
+            @field(dst, f.name) = @unionInit(U, v.name, try variantValue(ctx, v, field));
+            return true;
+        }
+    }
+    return false;
+}
+
+/// One case's payload, read on its own. A case carries no presence of its own,
+/// so the value is built and then married to the tag.
+fn variantValue(ctx: *Ctx, comptime v: proto.Field, field: Field) Error!v.type {
+    if (comptime v.elem == .message) {
+        const M = v.elem.message;
+        var nested = try field.expect(.len).message();
+        var value: M = proto.init(M);
+        try readMessage(ctx, &nested, M, &value);
+        return value;
+    }
+    return scalarValue(ctx, v.elem, field);
 }
 
 /// Read `field` into `dst`. Returns false, without consuming the field, when
@@ -299,7 +337,7 @@ fn scalarValue(ctx: *Ctx, comptime elem: proto.Elem, field: Field) Error!proto.E
             }
             break :blk payload;
         },
-        .message => unreachable,
+        .message, .oneof => unreachable,
     };
 }
 

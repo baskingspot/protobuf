@@ -55,6 +55,11 @@ pub const sint = proto.sint;
 pub const fixed = proto.fixed;
 /// A repeated numeric field written one element per tag.
 pub const unpacked = proto.unpacked;
+/// A oneof: a `?U` field whose union cases each carry their own number.
+pub const oneof = proto.oneof;
+/// The case table for a oneof union, the way `Descriptor` is the table for a
+/// message struct.
+pub const Variants = proto.Variants;
 /// Reads one field at a time from an `Io.Reader`.
 pub const Reader = @import("Reader.zig");
 /// Back-to-back messages on one stream: a varint length, then that many bytes.

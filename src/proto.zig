@@ -67,13 +67,17 @@ pub const Encoding = enum {
     sint,
     /// `sfixed32`, `sfixed64`, `fixed32`, `fixed64`: little endian, fixed width.
     fixed,
+    /// A oneof: the field is `?U`, and each case of the union carries its own
+    /// number. `pb.oneof()` selects it, and the number in the entry is unused.
+    oneof,
 };
 
 /// One field's wire metadata: its number, and the encoding when the Zig type
 /// cannot say it. Written as `field(2)`, through a helper for the ambiguous
 /// cases, or as a literal when a rarer knob matters.
 pub const FieldDescriptor = struct {
-    /// Field number, from 1 to 2^29-1.
+    /// Field number, from 1 to 2^29-1. A oneof field has no number of its own,
+    /// so `pb.oneof()` leaves this at zero.
     number: u32,
     /// How the bytes are encoded; `.auto` lets the Zig type decide.
     encoding: Encoding = .auto,
@@ -115,6 +119,47 @@ pub fn fixed(number: u32) FieldDescriptor {
 /// A repeated numeric field written one element per tag, as proto2 does.
 pub fn unpacked(number: u32) FieldDescriptor {
     return .{ .number = number, .@"packed" = false };
+}
+
+/// A oneof: one field of the message is set at a time, and each case has its
+/// own field number.
+///
+/// The Zig field is `?U`, where `U` is a `union(enum)` that declares its own
+/// numbers in a `pb.Variants(@This())` table:
+///
+/// ```zig
+/// const Result = union(enum) {
+///     pub const protobuf: pb.Variants(@This()) = .{
+///         .ok = pb.field(2),
+///         .err = pb.string(3),
+///     };
+///
+///     ok: u32,
+///     err: []const u8,
+/// };
+///
+/// const Reply = struct {
+///     pub const protobuf: pb.Descriptor(@This()) = .{ .result = pb.oneof() };
+///     result: ?Result = null,
+/// };
+/// ```
+///
+/// A decode sets the case the wire carried and clears the one before it, so
+/// the last case on the wire wins. A case that is set is written even when its
+/// value is the type's zero.
+pub fn oneof() FieldDescriptor {
+    return .{ .number = 0, .encoding = .oneof };
+}
+
+/// The case table for the oneof union `U`: one `FieldDescriptor` per case,
+/// named exactly like the cases. `Descriptor` does the same job for a struct,
+/// and the same compiler checks apply.
+pub fn Variants(comptime U: type) type {
+    const u = @typeInfo(U).@"union";
+    const n = u.field_names.len;
+    var types: [n]type = @splat(FieldDescriptor);
+    var attrs: [n]std.lang.Type.Struct.FieldAttributes = @splat(.{});
+    return @Struct(.auto, null, u.field_names, &types, &attrs);
 }
 
 /// Fields a message did not recognize, kept so that a re-encode writes them
@@ -239,6 +284,8 @@ pub const Elem = union(enum) {
     bytes,
     /// A nested message type.
     message: type,
+    /// A oneof: the union whose cases each carry a number.
+    oneof: type,
 };
 
 /// One field of a message, with everything the wire format needs.
@@ -273,6 +320,8 @@ pub fn ElemType(comptime elem: Elem) type {
         .@"enum" => |E| E,
         .string, .bytes => []const u8,
         .message => |M| M,
+        // The union, not the optional: a oneof field is written case by case.
+        .oneof => |U| U,
     };
 }
 
@@ -300,6 +349,7 @@ pub fn elemWireType(elem: Elem) wire.WireType {
         .scalar => |s| scalarWireType(s),
         .@"enum" => .varint,
         .string, .bytes, .message => .len,
+        .oneof => @compileError("a oneof has one wire type per case"),
     };
 }
 
@@ -403,6 +453,104 @@ fn zero(comptime Ty: type) Ty {
     };
 }
 
+/// The entry for a oneof: a `?U` field, with `U`'s cases checked now rather
+/// than at the encode or decode call that reaches them.
+fn normalizeOneof(
+    comptime Ty: type,
+    comptime E: type,
+    comptime where: []const u8,
+    comptime name: [:0]const u8,
+    comptime optional: bool,
+) Field {
+    comptime {
+        if (!optional) {
+            @compileError(where ++ " is a oneof, so it must be a `?U`: `null` is the case " ++
+                "where no member of the union is set");
+        }
+        if (@typeInfo(E) != .@"union") {
+            @compileError(where ++ " uses pb.oneof(), so its type must be a union(enum); " ++
+                "found " ++ @typeName(E));
+        }
+        if (@typeInfo(E).@"union".tag_type == null) {
+            @compileError(where ++ " is a bare union, so there is no tag to say which case " ++
+                "is set. Declare it as union(enum)");
+        }
+        if (!@hasDecl(E, "protobuf")) {
+            @compileError(where ++ " is a oneof, so " ++ @typeName(E) ++
+                " needs a case table:\n" ++
+                "    pub const protobuf: pb.Variants(@This()) = .{ ... };");
+        }
+        if (@TypeOf(@field(E, "protobuf")) != Variants(E)) {
+            @compileError(@typeName(E) ++ ".protobuf must be declared as:\n" ++
+                "    pub const protobuf: pb.Variants(@This()) = .{ ... };");
+        }
+        _ = variants(E);
+        return .{
+            .name = name,
+            .number = 0,
+            .optional = true,
+            .repeated = false,
+            .is_packed = false,
+            .type = Ty,
+            .elem = .{ .oneof = E },
+        };
+    }
+}
+
+/// Every case of the oneof union `U`, in the order it declares them. The
+/// checks are the ones `info` applies to a message, minus the ones a case
+/// cannot have: a case is singular, has no presence of its own, and is never a
+/// nested oneof.
+pub fn variants(comptime U: type) Info {
+    comptime {
+        if (@typeInfo(U) != .@"union") {
+            @compileError(@typeName(U) ++ " is not a union, so it is not a oneof");
+        }
+        const u = @typeInfo(U).@"union";
+        const specs = @field(U, "protobuf");
+        var fields: [u.field_names.len]Field = undefined;
+
+        for (u.field_names, u.field_types, 0..) |name, Ty, i| {
+            const f = normalizeField(U, Ty, name, @field(specs, name));
+            if (f.elem == .oneof) {
+                @compileError(@typeName(U) ++ "." ++ name ++ " is a oneof inside a oneof");
+            }
+            if (f.optional) {
+                @compileError(@typeName(U) ++ "." ++ name ++
+                    " is optional, and a oneof case already has the union tag as its presence");
+            }
+            if (f.repeated) {
+                @compileError(@typeName(U) ++ "." ++ name ++
+                    " is repeated, and a oneof case is singular");
+            }
+            fields[i] = f;
+        }
+
+        for (fields, 0..) |f, i| {
+            for (fields[i + 1 ..]) |other| {
+                if (f.number == other.number) {
+                    @compileError(@typeName(U) ++ "." ++ f.name ++ " and " ++ other.name ++
+                        " both claim field number " ++ std.fmt.comptimePrint("{d}", .{f.number}));
+                }
+            }
+        }
+
+        for (fields) |f| switch (f.elem) {
+            .message => |M| {
+                if (!@hasDecl(M, "protobuf")) {
+                    @compileError(f.name ++ " of " ++ @typeName(U) ++ " is not a message: " ++
+                        @typeName(M) ++ " has no `pub const protobuf` table");
+                }
+                _ = info(M);
+            },
+            else => {},
+        };
+
+        const final = fields;
+        return .{ .fields = &final };
+    }
+}
+
 fn normalizeField(
     comptime T: type,
     comptime Ty: type,
@@ -420,6 +568,8 @@ fn normalizeField(
                 @compileError(where ++ " is a double optional; a field is either present or not");
             }
         }
+
+        if (spec.encoding == .oneof) return normalizeOneof(Ty, E, where, name, optional);
 
         var repeated = false;
         var is_bytes = false;
@@ -455,7 +605,7 @@ fn normalizeField(
 
         const numeric = switch (elem) {
             .scalar, .@"enum" => true,
-            .string, .bytes, .message => false,
+            .string, .bytes, .message, .oneof => false,
         };
         const is_packed = if (repeated)
             spec.@"packed" orelse numeric

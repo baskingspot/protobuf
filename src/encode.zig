@@ -104,6 +104,7 @@ fn unknownFields(sink: anytype, comptime T: type, value: T) !void {
 }
 
 fn emit(sink: anytype, comptime f: proto.Field, value: f.type, options: Options) !void {
+    if (comptime f.elem == .oneof) return oneof(sink, f, value, options);
     if (comptime f.optional) {
         if (value) |present| try single(sink, f, present, options);
         return;
@@ -111,6 +112,19 @@ fn emit(sink: anytype, comptime f: proto.Field, value: f.type, options: Options)
     if (comptime f.repeated) return repeated(sink, f, value, options);
     if (!options.write_defaults and isDefault(value)) return;
     return single(sink, f, value, options);
+}
+
+/// Write the one case of a oneof that is set. A case is written even when its
+/// value is the type's zero: the tag is the presence, and the case was chosen.
+fn oneof(sink: anytype, comptime f: proto.Field, value: f.type, options: Options) !void {
+    const U = f.elem.oneof;
+    const present = value orelse return;
+    const tag = std.meta.activeTag(present);
+    inline for (comptime proto.variants(U).fields) |v| {
+        if (tag == @field(@typeInfo(U).@"union".tag_type.?, v.name)) {
+            try single(sink, v, @field(present, v.name), options);
+        }
+    }
 }
 
 /// One tag and one payload: a singular field, or one element of an unpacked
@@ -160,6 +174,7 @@ fn payload(
         .scalar => |scalar| try sink.writeScalar(scalar, value),
         .@"enum" => try sink.writeScalar(.i32, @backingInt(value)),
         .string, .bytes => try sink.writeLen(value),
+        .oneof => unreachable,
         .message => |M| {
             var counted: Counter = .{};
             try message(&counted, M, value, options);

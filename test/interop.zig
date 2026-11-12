@@ -101,6 +101,32 @@ const All = struct {
     higher: u32 = 0,
 };
 
+/// A oneof: at most one case is set, and each case has its own number. The
+/// case that was set last on the wire wins.
+const Choice = struct {
+    pub const Pick = union(enum) {
+        pub const protobuf: pb.Variants(@This()) = .{
+            .number = pb.field(2),
+            .name = pb.string(3),
+            .detail = pb.field(6),
+        };
+
+        number: i32,
+        name: []const u8,
+        detail: Inner,
+    };
+
+    pub const protobuf: pb.Descriptor(@This()) = .{
+        .before = pb.field(1),
+        .pick = pb.oneof(),
+        .after = pb.field(7),
+    };
+
+    before: i32 = 0,
+    pick: ?Pick = null,
+    after: i32 = 0,
+};
+
 const fixtures = testingx.fixtures(@embedFile("data/fixtures.txtar"));
 const golden = fixtures.hex("interop/All.pb");
 
@@ -468,4 +494,55 @@ test "a nested message that holds only unknown fields is still written" {
     defer out.deinit();
     try pb.encode(Wrap, value, .{}, &out.writer);
     try testing.expectEqualSlices(u8, &[_]u8{ 0x0a, 0x02, 0x48, 0x2a }, out.written());
+}
+
+test "a oneof matches protoc" {
+    const choice: Choice = .{ .before = 11, .pick = .{ .name = "picked" }, .after = 22 };
+    const protoc_wrote = fixtures.hex("interop/Choice.pb");
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try pb.encode(Choice, choice, .{}, &out.writer);
+    try testing.expectEqualSlices(u8, protoc_wrote, out.written());
+
+    var parsed = try pb.decodeFromSlice(Choice, testing.allocator, protoc_wrote, .{});
+    defer parsed.deinit();
+    try testing.expectEqual(11, parsed.value.before);
+    try testing.expectEqualStrings("picked", parsed.value.pick.?.name);
+    try testing.expectEqual(22, parsed.value.after);
+}
+
+test "a oneof case set to zero is still written" {
+    // The tag is the presence: `.number = 0` is not the same message as null.
+    try testing.expectEqual(
+        @as(usize, 2),
+        pb.encodedSize(Choice, .{ .pick = .{ .number = 0 } }, .{}),
+    );
+    try testing.expectEqual(@as(usize, 0), pb.encodedSize(Choice, .{}, .{}));
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try pb.encode(Choice, .{ .pick = .{ .number = 0 } }, .{}, &out.writer);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0x10, 0x00 }, out.written());
+}
+
+test "the last oneof case on the wire wins" {
+    // Both cases are on the wire, which a well-behaved writer does not do.
+    // The parser keeps the last one, the way the reference parsers do.
+    const bytes = [_]u8{
+        0x10, 0x07, // number = 7
+        0x1a, 0x02, 'h', 'i', // name = "hi"
+    };
+    const parsed = try pb.decodeFromSliceLeaky(Choice, testing.allocator, &bytes, .{});
+    try testing.expectEqualStrings("hi", parsed.pick.?.name);
+    try testing.expect(std.meta.activeTag(parsed.pick.?) == .name);
+}
+
+test "an unknown number inside a oneof is not a case" {
+    const bytes = [_]u8{
+        0x10, 0x07, // number = 7
+        0x22, 0x01, 0xff, // field 4, which the oneof does not declare
+    };
+    const parsed = try pb.decodeFromSliceLeaky(Choice, testing.allocator, &bytes, .{});
+    try testing.expectEqual(@as(i32, 7), parsed.pick.?.number);
 }

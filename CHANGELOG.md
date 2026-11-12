@@ -7,6 +7,10 @@ All notable changes to protobuf are recorded here. The format follows
 
 ### Added
 
+- `pb.oneof()` and `pb.Variants(T)`: a oneof is a `?U` field where `U` is a
+  `union(enum)` with a case table. Each case has its own field number, a decode
+  keeps the last case on the wire, and a case set to its zero value is still
+  written.
 - `pb.Unknown`: a struct field of this type keeps every field the table does
   not declare, and `encode` writes them back after the declared fields. A
   known field number with a wire type the field does not take is kept too. The

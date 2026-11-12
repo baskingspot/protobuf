@@ -1,0 +1,5 @@
+# proto: interop/interop.proto
+# type: interop.Choice
+before: 11
+name: "picked"
+after: 22

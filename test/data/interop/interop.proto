@@ -45,3 +45,14 @@ message All {
   int32 high = 2047;
   uint32 higher = 16384;
 }
+
+// A oneof: one case at a time, each case with its own field number.
+message Choice {
+  int32 before = 1;
+  oneof pick {
+    int32 number = 2;
+    string name = 3;
+    Inner detail = 6;
+  }
+  int32 after = 7;
+}

@@ -307,6 +307,43 @@ test "decode from a reader copies instead of borrowing" {
     try testing.expect(text_at < start or text_at >= start + golden.len);
 }
 
+test "decodeBorrowed borrows strings and nested messages, allocating nothing" {
+    // A flat message: scalars by value, strings borrowed, nothing repeated.
+    const Flat = struct {
+        pub const protobuf: pb.Descriptor(@This()) = .{
+            .text = pb.string(1),
+            .inner = pb.field(2),
+        };
+
+        text: []const u8 = "",
+        inner: Inner = .{},
+    };
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try pb.encode(Flat{ .text = "hi", .inner = .{ .n = 7, .label = "in" } }, .{}, &out.writer);
+    const bytes = out.written();
+
+    const got = try pb.decodeBorrowed(Flat, bytes, .{});
+    try testing.expectEqualStrings("hi", got.text);
+    try testing.expectEqual(@as(i32, 7), got.inner.n);
+    try testing.expectEqualStrings("in", got.inner.label);
+
+    // Borrowed, not copied: both strings point into the input, including the
+    // one the nested message holds.
+    const start = @intFromPtr(bytes.ptr);
+    const end = start + bytes.len;
+    const text_at = @intFromPtr(got.text.ptr);
+    const label_at = @intFromPtr(got.inner.label.ptr);
+    try testing.expect(text_at >= start and text_at < end);
+    try testing.expect(label_at >= start and label_at < end);
+
+    // The options still apply: a string field is checked as UTF-8.
+    // Field 2, string, two bytes that are not UTF-8.
+    const invalid = [_]u8{ 0x12, 0x02, 0xc3, 0x28 };
+    try testing.expectError(error.InvalidUtf8, pb.decodeBorrowed(Inner, &invalid, .{}));
+}
+
 test "packed on the wire decodes into an unpacked field" {
     // Field 21 as a packed length-delimited field: tag 0xaa 0x01, two values.
     const bytes = [_]u8{ 0xaa, 0x01, 0x02, 0x05, 0x06 };

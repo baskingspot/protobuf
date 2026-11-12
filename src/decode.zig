@@ -114,6 +114,43 @@ pub fn decodeFromSliceLeaky(
     return read(ctx, &io, T);
 }
 
+/// Decode one message from a slice, borrowing every string and byte slice
+/// from it, allocating nothing. `T` must have no repeated field, at any
+/// depth, because an array needs an allocator: that is a compile-time error
+/// here. `bytes` must outlive the value, which for a message read from a
+/// stream is until the next read. The value has no arena and no `deinit`.
+/// A message that passes the compile-time check cannot fail with
+/// `error.OutOfMemory`.
+pub fn decodeBorrowed(comptime T: type, bytes: []const u8, options: Options) Error!T {
+    comptime assertNoRepeated(T, "decodeBorrowed: " ++ @typeName(T));
+    var io: Io.Reader = .fixed(bytes);
+    // The walk above says this message never asks the allocator for anything.
+    // This one cannot answer, so a case the walk missed fails loudly here
+    // instead of allocating quietly in a caller that promised not to.
+    var none: std.heap.FixedBufferAllocator = .init(&.{});
+    const ctx: Ctx = .{ .gpa = none.allocator(), .options = options, .copy = false };
+    return read(ctx, &io, T);
+}
+
+/// `decodeBorrowed`'s half of the contract: no field anywhere in `T` needs
+/// an array.
+fn assertNoRepeated(comptime T: type, comptime where: []const u8) void {
+    switch (@typeInfo(T)) {
+        .@"struct" => {},
+        else => @compileError(where ++ " is not a message struct"),
+    }
+    for (comptime proto.info(T).fields) |f| {
+        if (f.repeated) {
+            @compileError(where ++ " has the repeated field '" ++ f.name ++
+                "', which needs an array. Use decodeFromSliceLeaky.");
+        }
+        switch (f.elem) {
+            .message => |M| assertNoRepeated(M, where ++ "." ++ f.name),
+            else => {},
+        }
+    }
+}
+
 fn read(ctx: Ctx, io: *Io.Reader, comptime T: type) Error!T {
     var local = ctx;
     var r: Reader = .init(io);

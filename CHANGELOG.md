@@ -5,6 +5,14 @@ All notable changes to protobuf are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `pb.decodeBorrowed(T, bytes, options)`: decode a message whose strings and
+  bytes borrow the input slice, with no allocation and no arena to free.
+  `T` must have no repeated field at any depth; that is a compile-time error,
+  because an array needs an allocator. `bytes` must outlive the result, which
+  for a message read from a stream is until the next read.
+
 ## [0.1.0] - 2026-11-10
 
 ### Added

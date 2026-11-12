@@ -19,6 +19,9 @@ pub const decodeLeaky = @import("decode.zig").decodeLeaky;
 pub const decodeFromSlice = @import("decode.zig").decodeFromSlice;
 /// The borrowing decode, into memory the caller owns.
 pub const decodeFromSliceLeaky = @import("decode.zig").decodeFromSliceLeaky;
+/// The allocation-free decode: borrow every string, take no allocator, and
+/// refuse a repeated field at compile time.
+pub const decodeBorrowed = @import("decode.zig").decodeBorrowed;
 /// Options for `decode` and its variants.
 pub const DecodeOptions = @import("decode.zig").Options;
 /// Encode one message into a writer.

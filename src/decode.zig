@@ -135,6 +135,11 @@ fn assertNoRepeated(comptime T: type, comptime where: []const u8) void {
         .@"struct" => {},
         else => @compileError(where ++ " is not a message struct"),
     }
+    if (comptime proto.unknownFieldName(T)) |name| {
+        @compileError(where ++ " has the field '" ++ name ++ "', typed " ++
+            @typeName(proto.Unknown) ++ ", which needs an array of every skipped " ++
+            "field. Use decodeFromSliceLeaky.");
+    }
     for (comptime proto.info(T).fields) |f| {
         if (f.repeated) {
             @compileError(where ++ " has the repeated field '" ++ f.name ++
@@ -185,16 +190,19 @@ const Ctx = struct {
 fn readMessage(ctx: *Ctx, r: *Reader, comptime T: type, dst: *T) Error!void {
     const fields = comptime proto.info(T).fields;
     while (try r.next()) |field| {
-        var handled = false;
+        var claimed = false;
         inline for (fields) |f| {
             if (field.fieldNumber() == f.number) {
-                handled = true;
-                try readField(ctx, T, f, dst, field);
+                claimed = true;
+                if (!try readField(ctx, T, f, dst, field)) {
+                    try captureUnknown(ctx, T, dst, field);
+                }
             }
         }
         // An unknown number, or a known number with a wire type the field does
-        // not take, is skipped. That is what the reference parsers do.
-        if (!handled) try skip(field);
+        // not take, is skipped. A message with an `Unknown` field keeps it
+        // instead, so the next encode writes it back.
+        if (!claimed) try captureUnknown(ctx, T, dst, field);
     }
 }
 
@@ -206,18 +214,56 @@ fn skip(field: Field) Error!void {
     }
 }
 
+/// Keep a field the message did not recognize, when the message declares an
+/// `Unknown` field. Without one the field is skipped, the way the reference
+/// parsers drop what they have no schema for.
+fn captureUnknown(ctx: *Ctx, comptime T: type, dst: *T, field: Field) Error!void {
+    if (comptime !proto.hasUnknown(T)) return skip(field);
+
+    const record = try unknownRecord(ctx, field);
+    const s = @typeInfo(T).@"struct";
+    inline for (s.field_names, s.field_types) |name, Ty| {
+        if (Ty == proto.Unknown) {
+            var list: std.ArrayList(proto.Unknown.Record) = .empty;
+            defer list.deinit(ctx.gpa);
+            try list.appendSlice(ctx.gpa, @field(dst, name).records);
+            try list.append(ctx.gpa, record);
+            @field(dst, name) = .{ .records = try list.toOwnedSlice(ctx.gpa) };
+        }
+    }
+}
+
+/// One skipped field, as the wire value it arrived as.
+fn unknownRecord(ctx: *Ctx, field: Field) Error!proto.Unknown.Record {
+    return switch (field) {
+        .varint => |f| .{ .varint = .{ .number = f.field_number, .value = f.value } },
+        .fixed64 => |f| .{ .fixed64 = .{ .number = f.field_number, .value = f.value } },
+        .fixed32 => |f| .{ .fixed32 = .{ .number = f.field_number, .value = f.value } },
+        .len => |f| .{ .len = .{
+            .number = f.field_number,
+            .bytes = try payloadBytes(ctx, f),
+        } },
+    };
+}
+
+/// Read `field` into `dst`. Returns false, without consuming the field, when
+/// the wire type is one the field does not accept: the caller keeps it as an
+/// unknown field or skips it.
 fn readField(
     ctx: *Ctx,
     comptime T: type,
     comptime f: proto.Field,
     dst: *T,
     field: Field,
-) Error!void {
+) Error!bool {
     const expected = proto.elemWireType(f.elem);
     const packed_arrival = f.repeated and field.wireType() == .len and expected != .len;
-    if (field.wireType() != expected and !packed_arrival) return skip(field);
+    if (field.wireType() != expected and !packed_arrival) return false;
 
-    if (comptime f.repeated) return readRepeated(ctx, T, f, dst, field);
+    if (comptime f.repeated) {
+        try readRepeated(ctx, T, f, dst, field);
+        return true;
+    }
 
     if (comptime f.elem == .message) {
         const M = f.elem.message;
@@ -228,10 +274,11 @@ fn readField(
         } else {
             try readMessage(ctx, &nested, M, &@field(dst, f.name));
         }
-        return;
+        return true;
     }
 
     @field(dst, f.name) = try scalarValue(ctx, f.elem, field);
+    return true;
 }
 
 /// Read one value of `elem`. An optional field takes it through the coercion

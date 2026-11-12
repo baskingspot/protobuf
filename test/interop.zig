@@ -398,3 +398,74 @@ test "write_defaults writes the zero values too" {
     // n = 0 and label = "" are two tags and nothing else.
     try testing.expectEqual(4, pb.encodedSize(Inner, zeros, .{ .write_defaults = true }));
 }
+
+test "unknown fields keep their wire value and write it back" {
+    const Keeping = struct {
+        pub const protobuf: pb.Descriptor(@This()) = .{ .id = pb.field(1) };
+
+        id: u32 = 0,
+        unknown: pb.Unknown = .{},
+    };
+
+    const kept: Keeping = .{
+        .id = 1,
+        .unknown = .{ .records = &.{
+            .{ .varint = .{ .number = 10, .value = 300 } },
+            .{ .fixed32 = .{ .number = 11, .value = 0x11223344 } },
+            .{ .fixed64 = .{ .number = 12, .value = 0x1122334455667788 } },
+            .{ .len = .{ .number = 13, .bytes = "hi" } },
+        } },
+    };
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try pb.encode(Keeping, kept, .{}, &out.writer);
+
+    const expected = [_]u8{
+        0x08, 0x01, // id = 1
+        0x50, 0xac, 0x02, // field 10, varint 300
+        0x5d, 0x44, 0x33, 0x22, 0x11, // field 11, fixed32
+        0x61, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, // field 12, fixed64
+        0x6a, 0x02, 'h', 'i', // field 13, "hi"
+    };
+    try testing.expectEqualSlices(u8, &expected, out.written());
+
+    // The record array is allocated even by the borrowing decoder, but the
+    // length-delimited payload inside a record still borrows its bytes.
+    var parsed = try pb.decodeFromSlice(Keeping, testing.allocator, &expected, .{});
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 4), parsed.value.unknown.records.len);
+    try testing.expectEqual(@as(u64, 300), parsed.value.unknown.records[0].varint.value);
+    try testing.expectEqual(@as(u32, 0x11223344), parsed.value.unknown.records[1].fixed32.value);
+    try testing.expectEqual(
+        @as(u64, 0x1122334455667788),
+        parsed.value.unknown.records[2].fixed64.value,
+    );
+    const len = parsed.value.unknown.records[3].len;
+    try testing.expectEqualStrings("hi", len.bytes);
+    try testing.expectEqual(@intFromPtr(&expected[21]), @intFromPtr(len.bytes.ptr));
+}
+
+test "a nested message that holds only unknown fields is still written" {
+    const Knot = struct {
+        pub const protobuf: pb.Descriptor(@This()) = .{ .n = pb.field(1) };
+
+        n: u32 = 0,
+        unknown: pb.Unknown = .{},
+    };
+
+    const Wrap = struct {
+        pub const protobuf: pb.Descriptor(@This()) = .{ .inner = pb.field(1) };
+
+        inner: Knot = .{},
+    };
+
+    const value: Wrap = .{ .inner = .{
+        .unknown = .{ .records = &.{.{ .varint = .{ .number = 9, .value = 42 } }} },
+    } };
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try pb.encode(Wrap, value, .{}, &out.writer);
+    try testing.expectEqualSlices(u8, &[_]u8{ 0x0a, 0x02, 0x48, 0x2a }, out.written());
+}

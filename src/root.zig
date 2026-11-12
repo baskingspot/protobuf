@@ -41,6 +41,8 @@ pub const proto = @import("proto.zig");
 pub const Descriptor = proto.Descriptor;
 /// One entry in that table.
 pub const FieldDescriptor = proto.FieldDescriptor;
+/// Fields the decoder did not recognize, kept so a re-encode writes them back.
+pub const Unknown = proto.Unknown;
 /// A field whose Zig type says everything: `pb.field(2)`.
 pub const field = proto.field;
 /// A `[]const u8` checked as UTF-8.

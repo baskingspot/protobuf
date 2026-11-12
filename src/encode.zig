@@ -69,6 +69,38 @@ fn message(sink: anytype, comptime T: type, value: T, options: Options) !void {
     inline for (fields) |f| {
         try emit(sink, f, @field(value, f.name), options);
     }
+    try unknownFields(sink, T, value);
+}
+
+/// Write back the fields a decode did not recognize. They go after the
+/// declared fields: the format gives field order no meaning.
+fn unknownFields(sink: anytype, comptime T: type, value: T) !void {
+    if (comptime !proto.hasUnknown(T)) return;
+    const s = @typeInfo(T).@"struct";
+    inline for (s.field_names, s.field_types) |name, Ty| {
+        if (Ty == proto.Unknown) {
+            for (@field(value, name).records) |record| {
+                switch (record) {
+                    .varint => |f| {
+                        try sink.writeTag(.{ .field_number = f.number, .wire_type = .varint });
+                        try sink.writeVarint(u64, f.value);
+                    },
+                    .fixed64 => |f| {
+                        try sink.writeTag(.{ .field_number = f.number, .wire_type = .fixed64 });
+                        try sink.writeScalar(.fixed64, f.value);
+                    },
+                    .fixed32 => |f| {
+                        try sink.writeTag(.{ .field_number = f.number, .wire_type = .fixed32 });
+                        try sink.writeScalar(.fixed32, f.value);
+                    },
+                    .len => |f| {
+                        try sink.writeTag(.{ .field_number = f.number, .wire_type = .len });
+                        try sink.writeLen(f.bytes);
+                    },
+                }
+            }
+        }
+    }
 }
 
 fn emit(sink: anytype, comptime f: proto.Field, value: f.type, options: Options) !void {
@@ -142,9 +174,20 @@ fn payload(
 }
 
 fn messageIsDefault(value: anytype) bool {
-    const fields = comptime proto.info(@TypeOf(value)).fields;
+    const T = @TypeOf(value);
+    const fields = comptime proto.info(T).fields;
     inline for (fields) |f| {
         if (!isDefault(@field(value, f.name))) return false;
+    }
+    // A message that carries only skipped fields is not empty: they are bytes
+    // the caller asked to keep.
+    if (comptime proto.hasUnknown(T)) {
+        const s = @typeInfo(T).@"struct";
+        inline for (s.field_names, s.field_types) |name, Ty| {
+            if (Ty == proto.Unknown and @field(value, name).records.len != 0) {
+                return false;
+            }
+        }
     }
     return true;
 }

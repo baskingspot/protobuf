@@ -298,3 +298,58 @@ test "unknown and mismatched fields are skipped" {
     try testing.expectEqualStrings("", parsed.value.key);
     try testing.expectEqualStrings("hi", parsed.value.value);
 }
+
+test "an Unknown field keeps what the schema does not have" {
+    const Keeping = struct {
+        pub const protobuf: pb.Descriptor(@This()) = .{
+            .key = pb.bytes(1),
+            .value = pb.bytes(2),
+        };
+
+        key: []const u8 = "",
+        value: []const u8 = "",
+        unknown: pb.Unknown = .{},
+    };
+
+    // The same bytes as above: field 9 varint 42, field 1 with the wrong wire
+    // type, then the value.
+    const bytes = [_]u8{
+        0x48, 0x2a, // unknown field 9, varint 42
+        0x08, 0x07, // field 1 with the wrong wire type
+        0x12, 0x02, 'h', 'i', // value = "hi"
+    };
+
+    var parsed = try pb.decodeFromSlice(Keeping, testing.allocator, &bytes, .{});
+    defer parsed.deinit();
+    try testing.expectEqualStrings("", parsed.value.key);
+    try testing.expectEqualStrings("hi", parsed.value.value);
+    try testing.expectEqual(@as(usize, 2), parsed.value.unknown.records.len);
+
+    const first = parsed.value.unknown.records[0].varint;
+    try testing.expectEqual(@as(u32, 9), first.number);
+    try testing.expectEqual(@as(u64, 42), first.value);
+
+    const second = parsed.value.unknown.records[1].varint;
+    try testing.expectEqual(@as(u32, 1), second.number);
+    try testing.expectEqual(@as(u64, 7), second.value);
+
+    // Encoding writes them back after the fields the schema knows, which is a
+    // different order and the same message.
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try pb.encode(Keeping, parsed.value, .{}, &out.writer);
+    try testing.expectEqualSlices(
+        u8,
+        &[_]u8{
+            0x12, 0x02, 'h', 'i', // value
+            0x48, 0x2a, // unknown field 9
+            0x08, 0x07, // field 1, wrong wire type
+        },
+        out.written(),
+    );
+
+    var again = try pb.decodeFromSlice(Keeping, testing.allocator, out.written(), .{});
+    defer again.deinit();
+    try testing.expectEqual(@as(usize, 2), again.value.unknown.records.len);
+    try testing.expectEqual(@as(u64, 42), again.value.unknown.records[0].varint.value);
+}

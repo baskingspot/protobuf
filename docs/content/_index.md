@@ -13,6 +13,7 @@ its field numbers in a `Descriptor(@This())` table.
 
 - [Wire format](#wire-format): `Writer` emits individual fields, and `Reader.next` returns each field from an input reader.
 - [Typed messages](#typed-messages): `Descriptor(@This())` maps Zig fields to wire numbers for `encode` and `decode`.
+- [Unknown fields](#unknown-fields): a field typed `pb.Unknown` keeps the fields the table does not declare, and `encode` writes them back.
 - [Message streams](#message-streams): `pb.delimited` writes and reads the length prefix that separates back-to-back messages.
 - [Ownership](#ownership): `Parsed.deinit` frees decoded allocations, while slice-based decoders borrow string and byte data.
 - [Encoding options](#encoding-options): `EncodeOptions` controls default values, and `DecodeOptions` controls UTF-8 checks.
@@ -121,6 +122,35 @@ The wire format has no message delimiter. `decode` reads until the reader ends.
 A persistent stream adds a length before each message. Refer to
 [Message streams](#message-streams).
 
+# Unknown fields
+
+A decoder skips a field number that no table entry claims. A struct with a
+field of type `pb.Unknown` keeps those fields instead, and `encode` writes them
+back. An older schema then passes a newer message through without deleting it.
+
+```zig
+const Person = struct {
+    pub const protobuf: pb.Descriptor(@This()) = .{ .id = pb.field(1) };
+
+    id: u32 = 0,
+    unknown: pb.Unknown = .{},
+};
+```
+
+`pb.Unknown.records` holds one record for each skipped field, in arrival order.
+A record holds the field number and the value as it arrived: `varint`,
+`fixed32`, `fixed64`, or `len`. A `len` record borrows its bytes from the input
+when the decoder borrows, in the same way as a `string` field.
+
+The `unknown` field is not part of `Descriptor(@This())`, and its name is
+yours. Declare one field of this type. Two such fields are a compile error.
+
+`encode` writes the records after the declared fields. Field order has no
+meaning in the format, so a round trip can move a field.
+
+A record array needs an allocator, so a message with an `Unknown` field cannot
+use `decodeBorrowed`. Use `decodeFromSliceLeaky` instead.
+
 # Message streams
 
 A message carries no length of its own, so a stream of messages writes a
@@ -191,8 +221,9 @@ string fields. Byte fields do not receive UTF-8 checks.
 
 # Limits
 
-Group wire types return `error.InvalidWireType`. The package does not parse
-`.proto` files or generate Zig types.
+Group wire types return `error.InvalidWireType`, so an unknown group field is
+an error and not an `Unknown` record. The package does not parse `.proto` files
+or generate Zig types.
 
 Maps use repeated entry messages. Each entry places its key in field 1 and its
 value in field 2. There is no separate map helper.

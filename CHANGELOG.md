@@ -7,6 +7,10 @@ All notable changes to protobuf are recorded here. The format follows
 
 ### Added
 
+- `pb.Unknown`: a struct field of this type keeps every field the table does
+  not declare, and `encode` writes them back after the declared fields. A
+  known field number with a wire type the field does not take is kept too. The
+  field is not part of `Descriptor(T)`.
 - `pb.delimited`: `encode`, `writeBytes`, and `Reader`, the varint length prefix
   that separates back-to-back messages on one stream. `Frame.fields` bounds a
   field reader to one message, and `Frame.rest` returns the whole frame.

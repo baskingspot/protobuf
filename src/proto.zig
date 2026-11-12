@@ -117,16 +117,114 @@ pub fn unpacked(number: u32) FieldDescriptor {
     return .{ .number = number, .@"packed" = false };
 }
 
+/// Fields a message did not recognize, kept so that a re-encode writes them
+/// back. An older reader then passes a newer message's fields through instead
+/// of deleting them.
+///
+/// Declare a field of this type; it is not part of `Descriptor(T)`:
+///
+/// ```zig
+/// const Person = struct {
+///     pub const protobuf: Descriptor(@This()) = .{ .id = field(1) };
+///     id: u32 = 0,
+///     unknown: Unknown = .{},
+/// };
+/// ```
+///
+/// Decode appends one `Record` per field it skipped, in arrival order. Encode
+/// writes them after the declared fields, so their position in the message can
+/// change across a round trip. Field order carries no meaning in the format.
+///
+/// The records hold wire values, not bytes, so a `len` record borrows its
+/// payload from the input exactly as a `string` field does. An unknown field
+/// still needs the record array, so a message with this field cannot use
+/// `decodeBorrowed`.
+pub const Unknown = struct {
+    /// The fields that had no entry in the message's table.
+    records: []const Record = &.{},
+
+    /// One unknown field: its number, and its value as it arrived.
+    pub const Record = union(enum) {
+        varint: Varint,
+        fixed64: Fixed64,
+        fixed32: Fixed32,
+        len: Len,
+
+        /// A field number and a raw varint.
+        pub const Varint = struct {
+            number: u32,
+            value: u64,
+        };
+
+        /// A field number and eight little-endian bytes.
+        pub const Fixed64 = struct {
+            number: u32,
+            value: u64,
+        };
+
+        /// A field number and four little-endian bytes.
+        pub const Fixed32 = struct {
+            number: u32,
+            value: u32,
+        };
+
+        /// A field number and a length-delimited payload.
+        pub const Len = struct {
+            number: u32,
+            bytes: []const u8,
+        };
+    };
+};
+
+/// Whether `T` declares an `Unknown` field.
+pub fn hasUnknown(comptime T: type) bool {
+    const s = @typeInfo(T).@"struct";
+    for (s.field_types) |Ty| {
+        if (Ty == Unknown) return true;
+    }
+    return false;
+}
+
+/// The name of `T`'s `Unknown` field, or null. More than one is a compile
+/// error: two collectors would split the skipped fields between them.
+pub fn unknownFieldName(comptime T: type) ?[:0]const u8 {
+    const s = @typeInfo(T).@"struct";
+    var found: ?[:0]const u8 = null;
+    for (s.field_names, s.field_types) |name, Ty| {
+        if (Ty != Unknown) continue;
+        if (found != null) {
+            @compileError(@typeName(T) ++ " has more than one " ++ @typeName(Unknown) ++
+                " field; declare one and it collects every skipped field");
+        }
+        found = name;
+    }
+    return found;
+}
+
 /// The field-number table for message `T`: one `FieldDescriptor` per field of
 /// `T`, named exactly like the fields and with no defaults, so a literal must
 /// cover every field and may name no other. The compiler catches a missing
 /// entry, a misspelled one, and one of the wrong type.
 pub fn Descriptor(comptime T: type) type {
     const s = @typeInfo(T).@"struct";
-    const n = s.field_names.len;
+    // The `Unknown` collector is not a field on the wire, so it has no entry.
+    const n = blk: {
+        var count: usize = 0;
+        for (s.field_types) |Ty| {
+            if (Ty != Unknown) count += 1;
+        }
+        break :blk count;
+    };
+    var names: [n][:0]const u8 = undefined;
     var types: [n]type = @splat(FieldDescriptor);
     var attrs: [n]std.lang.Type.Struct.FieldAttributes = @splat(.{});
-    return @Struct(.auto, null, s.field_names, &types, &attrs);
+    var i: usize = 0;
+    for (s.field_names, s.field_types) |name, Ty| {
+        if (Ty == Unknown) continue;
+        names[i] = name;
+        i += 1;
+    }
+    return @Struct(.auto, null, &names, &types, &attrs);
 }
 
 /// A field's type, or the element type of a repeated field.
@@ -229,9 +327,12 @@ pub fn info(comptime T: type) Info {
         }
 
         const s = type_info.@"struct";
+        _ = unknownFieldName(T);
         var fields: [s.field_names.len]Field = undefined;
+        var count: usize = 0;
 
-        for (s.field_names, s.field_types, s.field_attrs, 0..) |name, Ty, attrs, i| {
+        for (s.field_names, s.field_types, s.field_attrs) |name, Ty, attrs| {
+            if (Ty == Unknown) continue;
             if (attrs.@"comptime") {
                 @compileError(@typeName(T) ++ "." ++ name ++
                     " is a comptime field, which is not a message field");
@@ -241,11 +342,13 @@ pub fn info(comptime T: type) Info {
                     "An absent protobuf field decodes as its default, " ++
                     "so the default is part of the schema.");
             }
-            fields[i] = normalizeField(T, Ty, name, @field(specs, name));
+            fields[count] = normalizeField(T, Ty, name, @field(specs, name));
+            count += 1;
         }
 
-        for (fields, 0..) |f, i| {
-            for (fields[i + 1 ..]) |other| {
+        const present = fields[0..count];
+        for (present, 0..) |f, i| {
+            for (present[i + 1 ..]) |other| {
                 if (f.number == other.number) {
                     @compileError(@typeName(T) ++ "." ++ f.name ++ " and " ++ other.name ++
                         " both claim field number " ++ std.fmt.comptimePrint("{d}", .{f.number}));
@@ -255,7 +358,7 @@ pub fn info(comptime T: type) Info {
 
         // A message-typed field must itself be a message, and the error should
         // point at this struct, not at the decode call that reached it.
-        for (fields) |f| switch (f.elem) {
+        for (present) |f| switch (f.elem) {
             .message => |M| {
                 if (!@hasDecl(M, "protobuf")) {
                     @compileError(f.name ++ " of " ++ @typeName(T) ++ " is not a message: " ++
@@ -266,7 +369,7 @@ pub fn info(comptime T: type) Info {
             else => {},
         };
 
-        const final = fields;
+        const final = present.*;
         return .{ .fields = &final };
     }
 }

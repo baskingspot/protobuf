@@ -5,6 +5,8 @@ All notable changes to protobuf are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-12
+
 ### Changed
 
 - `encode` and `encodedSize` name the message type instead of inferring it:

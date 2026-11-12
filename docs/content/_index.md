@@ -24,7 +24,7 @@ links the API declarations and their contracts.
 ## Install
 
 ```sh
-zig fetch --save https://baskingspot.dev/protobuf/v0.1.0.tar.gz
+zig fetch --save https://baskingspot.dev/protobuf/v0.2.0.tar.gz
 ```
 
 The package builds with Zig 0.17. Its pre-1.0 API is unstable.

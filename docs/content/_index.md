@@ -47,8 +47,9 @@ const pb = @import("protobuf");
 
 ## Read the examples
 
-[`docs/examples/`](../examples/) contains executable examples. `just test`
-compiles and runs them alongside the library tests.
+[`docs/examples/`](https://github.com/baskingspot/protobuf/tree/main/docs/examples)
+contains executable examples. `just test` compiles and runs them alongside the
+library tests.
 
 # Wire format
 
@@ -80,8 +81,8 @@ from the reader buffer and returns `error.NotBuffered` if that buffer lacks the
 complete value. The borrowed slice stays valid until the next read from that
 reader. `bytes(buf)` copies the value into the caller's buffer.
 
-The [wire example](../examples/wire.zig) checks the encoded bytes and the
-field values above.
+The [wire example](https://github.com/baskingspot/protobuf/blob/main/docs/examples/wire.zig)
+checks the encoded bytes and the field values above.
 
 # Typed messages
 
@@ -104,8 +105,8 @@ const Person = struct {
 
 `encode(T, value, options, writer)` writes the message through `Writer`.
 `encodedSize(T, value, options)` returns the exact byte count without output.
-The [typed example](../examples/typed.zig) compares those bytes with explicit
-field writes and checks the size.
+The [typed example](https://github.com/baskingspot/protobuf/blob/main/docs/examples/typed.zig)
+compares those bytes with explicit field writes and checks the size.
 
 ```zig
 var out: std.Io.Writer.Allocating = .init(gpa);
@@ -133,8 +134,9 @@ method. Their allocations use the caller's allocator. A caller-owned arena can
 release all allocations, including allocations before a decode error.
 `decodeFromSliceLeaky` still borrows string and byte data from the input.
 
-The [ownership example](../examples/ownership.zig) checks borrowed pointers and
-copied values. It also demonstrates both leaky variants with a caller-owned arena.
+The [ownership example](https://github.com/baskingspot/protobuf/blob/main/docs/examples/ownership.zig)
+checks borrowed pointers and copied values. It also demonstrates both leaky
+variants with a caller-owned arena.
 
 # Encoding options
 

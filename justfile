@@ -5,6 +5,27 @@
 default:
     @just --list
 
+[doc("Build the site into zig-out/site/protobuf/: the guide (Zola, from docs/) and the API reference (docgen JSON, rendered by the theme's api.html) under api/. The router in baskingspot/site serves /protobuf/... from it")]
+[group("docs")]
+doc: api
+    baskingspot-docs build protobuf
+
+[doc("Edit the guide with live reload (http://127.0.0.1:1111), API reference included")]
+[group("docs")]
+guide: api
+    baskingspot-docs serve protobuf
+
+# The API reference data. docgen comes from the baskingspot flake's docs shell,
+# so this is not a Zig build dependency.
+[private]
+api:
+    docgen --root src/root.zig --title protobuf --repo-url https://github.com/baskingspot/protobuf --rev main --format json --out docs/data
+
+[doc("Deploy the rendered docs to Cloudflare as an assets-only Worker (config in wrangler.jsonc). Needs CLOUDFLARE_API_TOKEN in the environment, plus CLOUDFLARE_ACCOUNT_ID if the token can see more than one account")]
+[group("docs")]
+doc-deploy: doc
+    wrangler deploy
+
 [doc("Unit tests, the protoc interop tests, and the docs examples")]
 [group("test")]
 test:
@@ -47,7 +68,7 @@ lint:
     ziglint
     zig fmt --check src test docs/examples bench build.zig build.zig.zon
     nix fmt -- --ci
-    oxfmt --check README.md AGENTS.md docs/content .github
+    oxfmt --check README.md AGENTS.md docs/content docs/config.toml .github
     actionlint
     zizmor .
     just --fmt --check
@@ -57,7 +78,7 @@ lint:
 fmt:
     zig fmt src test docs/examples bench build.zig build.zig.zon
     nix fmt
-    oxfmt README.md AGENTS.md docs/content .github
+    oxfmt README.md AGENTS.md docs/content docs/config.toml .github
     just --fmt
 
 [doc("Everything CI runs")]

@@ -15,6 +15,7 @@
       # toolchain version: pick that once, in the import.
       imports = with inputs.baskingspot.flakeModules; [
         base
+        docs
         zig."0.17"
       ];
 
@@ -24,6 +25,7 @@
           devShells.default = pkgs.mkShell {
             inputsFrom = [
               config.devShells.base
+              config.devShells.docs
               config.devShells."zig-0-17"
             ];
 

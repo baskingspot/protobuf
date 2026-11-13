@@ -260,9 +260,33 @@ names. The parser accepts both spellings whatever this option says.
 ## Base64
 
 A `bytes` field is base64, and a large payload spends most of its JSON time in
-the codec. std's codec is scalar: `pb.json` reaches about 60 MB/s of payload
-with it. `Options.base64` selects another codec, which is four functions and no
-state:
+the codec. std has one codec, and it is scalar: `pb.json` reaches about 60 MB/s
+of payload with it. `stdx.base64` moves whole vectors per instruction, and the
+same payload goes at about 900 MB/s.
+
+`Options.base64` selects the codec. It is four functions and no state, so this
+package keeps no dependency of its own: a caller that has large payloads brings
+a codec, and a caller that does not pays nothing.
+
+### Bringing in stdx.base64
+
+Add the package:
+
+```sh
+zig fetch --save git+https://github.com/baskingspot/stdx#b13fd1a9be2d9267130f38ae7990257cd4b211b6
+```
+
+stdx has no release with `base64` in it yet. When it tags one, this command
+becomes `zig fetch --save https://baskingspot.dev/stdx/vX.Y.Z.tar.gz`.
+
+Add the module to the code that calls `pb.json`:
+
+```zig
+const stdx = b.dependency("stdx", .{ .target = target, .optimize = optimize });
+exe.root_module.addImport("stdx", stdx.module("stdx"));
+```
+
+Describe the codec:
 
 ```zig
 const stdx = @import("stdx");
@@ -273,65 +297,31 @@ const fast: pb.json.Base64 = .{
     .decoded_len = stdx.base64.standard.decodedLen,
     .decode = stdx.base64.standard.decode,
 };
-
-try pb.json.encode(Blob, blob, .{ .base64 = fast }, &out.writer);
 ```
 
-`stdx.base64` moves whole vectors per instruction, and the same payload goes at
-about 900 MB/s. Decoding is different: the JSON scanner walks every character
-of the string before the codec sees it, so a large `bytes` field parses at
-about 40 MB/s whatever codec is selected.
+Pass it to each call:
 
-The codec needs a canonical alphabet, so the parser still accepts the URL-safe
+```zig
+try pb.json.encode(Blob, blob, .{ .base64 = fast }, &out.writer);
+var parsed = try pb.json.decode(Blob, text, .{ .base64 = fast }, gpa);
+```
+
+Keep one stdx pin in a build graph. Zig identifies a package by its URL and
+hash, so two pins of stdx in one graph are two copies of stdx, not one.
+
+The test in `test/stdx_base64.zig` is this adapter against stdx itself, so a
+change in either API stops the build.
+
+### What the codec does not fix
+
+The decoder walks every character of the JSON string before the codec sees it,
+because the scanner finds the end of the token and checks it. A large `bytes`
+field therefore parses at about 40 MB/s whatever codec is selected. The codec
+moves the decode from 27 MB/s to 42 MB/s and no further.
+
+The codec needs a canonical alphabet, so the parser accepts the URL-safe
 alphabet and missing padding by normalizing the text first. It copies the text
 only when it needs padding; canonical input is decoded in place.
-
-The decoder copies every string and array into an arena, so `pb.json` has no
-borrowing form: the scanner's string is only valid until the next token.
-`decodeLeaky` allocates from the allocator that you pass.
-
-[`docs/examples/json.zig`](https://github.com/baskingspot/protobuf/blob/main/docs/examples/json.zig)
-writes a message and reads it back.
-
-## Well-known types
-
-A well-known type has a form of its own, and `pb.wkt` holds the ones that are
-plain messages:
-
-| Type                                              | JSON                         |
-| ------------------------------------------------- | ---------------------------- |
-| `pb.wkt.Timestamp`                                | `"2024-04-05T12:34:56.500Z"` |
-| `pb.wkt.Duration`                                 | `"3.500s"`                   |
-| `pb.wkt.Int32Value`, and the eight other wrappers | the bare value: `5`, `"abc"` |
-| `pb.wkt.FieldMask`                                | `"userId,displayName"`       |
-| `pb.wkt.Empty`                                    | `{}`                         |
-
-A timestamp is always written in UTC, and a fraction has three, six, or nine
-digits: the fewest that name the value. A duration keeps the sign of both
-halves. A field mask converts between the camelCase paths of JSON and the
-snake_case paths of the message.
-
-`google.protobuf.Any`, `Struct`, `Value`, and `ListValue` are not in `pb.wkt`.
-`Any` needs a registry from a type URL to a message, and the other three hold
-themselves, which this layer cannot express.
-
-## The fixtures
-
-The tests compare against JSON that `google.protobuf`'s `json_format` wrote, so
-the oracle is the reference implementation and not this package's idea of it.
-`just protojson` regenerates `test/data/json.txtar` from the same text-format
-messages that `just proto` gives to protoc. A fixture pair therefore describes
-one message in two encodings from two implementations, and the tests check that
-both describe the same message: the JSON decodes to a value that encodes to
-protoc's bytes, or the value this layer writes is the JSON the reference
-printer wrote.
-
-The comparison is structural: member order and whitespace carry no meaning in
-JSON, so neither is compared. A map written in another order is the same map.
-
-This is not the conformance suite. The upstream suite covers cases that this
-layer does not claim: `Any`, `Struct`, and `Value`, editions, and the exact
-treatment of a duplicate key.
 
 # Message streams
 

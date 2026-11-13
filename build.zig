@@ -30,6 +30,27 @@ pub fn build(b: *std.Build) void {
     passthruArgs(b, run_mod_tests);
     test_step.dependOn(&run_mod_tests.step);
 
+    // The base64 adapter the guide shows, run against stdx so the snippet in
+    // the guide cannot drift away from stdx's API. stdx is a lazy dependency:
+    // only this module and the root build ask for it.
+    if (b.lazyDependency("stdx", .{ .target = target })) |stdx_dep| {
+        const tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/stdx_base64.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "protobuf", .module = mod },
+                    .{ .name = "stdx", .module = stdx_dep.module("stdx") },
+                },
+            }),
+            .test_runner = runner,
+        });
+        const run = b.addRunArtifact(tests);
+        passthruArgs(b, run);
+        test_step.dependOn(&run.step);
+    }
+
     // The interop tests compare against bytes protoc wrote, kept under
     // test/data. They are their own modules so the package itself does not
     // carry them.

@@ -273,11 +273,8 @@ a codec, and a caller that does not pays nothing.
 Add the package:
 
 ```sh
-zig fetch --save git+https://github.com/baskingspot/stdx#b13fd1a9be2d9267130f38ae7990257cd4b211b6
+zig fetch --save https://baskingspot.dev/stdx/v0.5.0.tar.gz
 ```
-
-stdx has no release with `base64` in it yet. When it tags one, this command
-becomes `zig fetch --save https://baskingspot.dev/stdx/vX.Y.Z.tar.gz`.
 
 Add the module to the code that calls `pb.json`:
 

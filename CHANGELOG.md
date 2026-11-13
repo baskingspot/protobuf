@@ -5,7 +5,18 @@ All notable changes to protobuf are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `pb.json.encode` overflowed its chunk arithmetic on a `bytes` field of 768
+  bytes or more. A payload that size is now one chunk of 3 KiB, and a test
+  covers a blob larger than a chunk.
+
 ### Added
+
+- `pb.json.Options.base64` and `pb.json.Base64`: the base64 codec for `bytes`
+  fields, four functions and no state. The default is `pb.json.base64_std`,
+  which is std's scalar codec. A caller with large payloads passes a vectorized
+  one, such as `stdx.base64`.
 
 - `pb.map(n)`: marks a repeated entry message as a `map<K, V>`. The binary
   encoding does not change; JSON writes it as one object instead of a list of

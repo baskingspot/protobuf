@@ -257,6 +257,35 @@ The rules that this follows:
 `Options.use_proto_names` writes the Zig field names instead of the camelCase
 names. The parser accepts both spellings whatever this option says.
 
+## Base64
+
+A `bytes` field is base64, and a large payload spends most of its JSON time in
+the codec. std's codec is scalar: `pb.json` reaches about 60 MB/s of payload
+with it. `Options.base64` selects another codec, which is four functions and no
+state:
+
+```zig
+const stdx = @import("stdx");
+
+const fast: pb.json.Base64 = .{
+    .encoded_len = stdx.base64.standard.encodedLen,
+    .encode = stdx.base64.standard.encode,
+    .decoded_len = stdx.base64.standard.decodedLen,
+    .decode = stdx.base64.standard.decode,
+};
+
+try pb.json.encode(Blob, blob, .{ .base64 = fast }, &out.writer);
+```
+
+`stdx.base64` moves whole vectors per instruction, and the same payload goes at
+about 900 MB/s. Decoding is different: the JSON scanner walks every character
+of the string before the codec sees it, so a large `bytes` field parses at
+about 40 MB/s whatever codec is selected.
+
+The codec needs a canonical alphabet, so the parser still accepts the URL-safe
+alphabet and missing padding by normalizing the text first. It copies the text
+only when it needs padding; canonical input is decoded in place.
+
 The decoder copies every string and array into an arena, so `pb.json` has no
 borrowing form: the scanner's string is only valid until the next token.
 `decodeLeaky` allocates from the allocator that you pass.

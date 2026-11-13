@@ -54,7 +54,54 @@ pub const Options = struct {
     /// Accept an object key that no field claims instead of failing with
     /// `error.UnknownField`. The value behind it is skipped.
     ignore_unknown_fields: bool = false,
+    /// The base64 codec for `bytes` fields. The default is std's, which is
+    /// scalar: about 60 MB/s on an M-series core. A caller with large
+    /// payloads passes a vectorized codec; `Base64` has the four fields it
+    /// needs.
+    base64: Base64 = base64_std,
 };
+
+/// The base64 codec a JSON pass uses for `bytes`. Four functions, no state:
+/// both std and `stdx.base64` fit, and the one selected is the whole of the
+/// dependency question.
+pub const Base64 = struct {
+    /// The byte count `encode` writes for `source_len` input bytes.
+    encoded_len: *const fn (source_len: usize) usize,
+    /// Encode `source` into `dest`, which holds at least
+    /// `encoded_len(source.len)` bytes.
+    encode: *const fn (dest: []u8, source: []const u8) []const u8,
+    /// The exact byte count `decode` produces, or why `source` is not base64.
+    decoded_len: *const fn (source: []const u8) std.base64.Error!usize,
+    /// Decode `source` into `dest`, which holds at least `decoded_len(source)`
+    /// bytes. The result is the bytes written.
+    decode: *const fn (dest: []u8, source: []const u8) std.base64.Error![]const u8,
+};
+
+/// std's base64: scalar, and the only implementation in the standard library.
+pub const base64_std: Base64 = .{
+    .encoded_len = stdEncodedLen,
+    .encode = stdEncode,
+    .decoded_len = stdDecodedLen,
+    .decode = stdDecode,
+};
+
+fn stdEncodedLen(source_len: usize) usize {
+    return std.base64.standard.Encoder.calcSize(source_len);
+}
+
+fn stdEncode(dest: []u8, source: []const u8) []const u8 {
+    return std.base64.standard.Encoder.encode(dest, source);
+}
+
+fn stdDecodedLen(source: []const u8) std.base64.Error!usize {
+    return std.base64.standard.Decoder.calcSizeForSlice(source);
+}
+
+fn stdDecode(dest: []u8, source: []const u8) std.base64.Error![]const u8 {
+    const size = try std.base64.standard.Decoder.calcSizeForSlice(source);
+    try std.base64.standard.Decoder.decode(dest[0..size], source);
+    return dest[0..size];
+}
 
 /// Every error a JSON codec returns: the scanner's, the allocator's, and the
 /// mapping's own.
@@ -341,20 +388,20 @@ const Encoder = struct {
     }
 
     /// Standard base64, in chunks, so no allocation is needed for the output.
+    /// A chunk is a multiple of three bytes, so every call but the last is
+    /// padding-free and lands on a four-character boundary.
     fn base64(e: *Encoder, bytes: []const u8) !void {
-        const encoder = std.base64.standard.Encoder;
+        const codec = e.options.base64;
+        const chunk: usize = 3072;
+        var buffer: [chunk / 3 * 4]u8 = undefined;
+
         try e.io.writeByte('"');
-        var buffer: [1024]u8 = undefined;
         var rest = bytes;
-        while (rest.len >= 3) {
-            const take = @min(rest.len / 3, buffer.len / 4) * 3;
-            try e.io.writeAll(encoder.encode(&buffer, rest[0..take]));
-            rest = rest[take..];
+        while (rest.len > chunk) {
+            try e.io.writeAll(codec.encode(&buffer, rest[0..chunk]));
+            rest = rest[chunk..];
         }
-        if (rest.len > 0) {
-            var tail: [4]u8 = undefined;
-            try e.io.writeAll(encoder.encode(&tail, rest));
-        }
+        if (rest.len > 0) try e.io.writeAll(codec.encode(&buffer, rest));
         try e.io.writeByte('"');
     }
 
@@ -627,7 +674,7 @@ const Decoder = struct {
             .string, .allocated_string => |s| s,
             else => return error.UnexpectedToken,
         };
-        return decodeBase64(d.gpa, text);
+        return decodeBase64(d.gpa, text, d.options.base64);
     }
 
     fn readSpecial(d: *Decoder, T: type, comptime form: wkt.Form, dst: *T) Error!void {
@@ -748,28 +795,53 @@ fn parseFloatText(comptime E: type, text: []const u8) Error!E {
     return std.fmt.parseFloat(E, text) catch error.InvalidValue;
 }
 
-/// Base64 into memory the caller owns. Accepts the standard and URL-safe
-/// alphabets, with or without padding.
-fn decodeBase64(gpa: Allocator, text: []const u8) Error![]const u8 {
+/// Base64 into memory the caller owns. The mapping accepts the standard and
+/// URL-safe alphabets, with or without padding, so the text is normalized
+/// before the codec sees it. A codec takes one alphabet and one padding rule.
+fn decodeBase64(gpa: Allocator, text: []const u8, codec: Base64) Error![]const u8 {
     if (text.len == 0) return &.{};
-    var padded = try gpa.alloc(u8, text.len + 3);
-    defer gpa.free(padded);
-    for (text, 0..) |c, i| {
-        padded[i] = switch (c) {
-            '-' => '+',
-            '_' => '/',
-            else => c,
-        };
-    }
-    var length = text.len;
-    while (length % 4 != 0) : (length += 1) padded[length] = '=';
 
-    const decoder = std.base64.standard.Decoder;
-    const size = decoder.calcSizeForSlice(padded[0..length]) catch return error.InvalidBase64;
+    // Most text is already canonical, and then the normalization is a check
+    // rather than a copy.
+    var owned: ?[]u8 = null;
+    defer if (owned) |buffer| gpa.free(buffer);
+
+    var source = text;
+    if (!isCanonicalBase64(text)) {
+        const padded = try gpa.alloc(u8, std.mem.alignForward(usize, text.len, 4));
+        owned = padded;
+        for (text, 0..) |c, i| {
+            padded[i] = switch (c) {
+                '-' => '+',
+                '_' => '/',
+                else => c,
+            };
+        }
+        @memset(padded[text.len..], '=');
+        source = padded;
+    }
+
+    const size = codec.decoded_len(source) catch return error.InvalidBase64;
     const out = try gpa.alloc(u8, size);
     errdefer gpa.free(out);
-    decoder.decode(out, padded[0..length]) catch return error.InvalidBase64;
+    const written = codec.decode(out, source) catch return error.InvalidBase64;
+    // The allocation is the exact size the codec promised, so a codec that
+    // disagrees with itself is a bug and not a slice to hand back.
+    if (written.len != size) return error.InvalidBase64;
     return out;
+}
+
+/// Whether `text` is standard base64 with padding, the form every codec in
+/// the world takes: a multiple of four characters, no pad in the middle, and
+/// the standard alphabet.
+fn isCanonicalBase64(text: []const u8) bool {
+    if (text.len % 4 != 0) return false;
+    const body = std.mem.trimEnd(u8, text, "=");
+    if (text.len - body.len > 2) return false;
+    for (body) |c| {
+        if (c == '-' or c == '_' or c == '=') return false;
+    }
+    return true;
 }
 
 /// `userName` becomes `user_name`: the field-mask form is camelCase, and the
@@ -811,7 +883,7 @@ test "snake case is the inverse for the paths it writes" {
     try std.testing.expectEqualStrings("user.display_name", snake);
 }
 
-test "base64 accepts both alphabets and no padding" {
+test "base64 accepts both alphabets and no padding, and a codec can be supplied" {
     const gpa = std.testing.allocator;
     const cases = [_]struct { text: []const u8, bytes: []const u8 }{
         .{ .text = "aGVsbG8=", .bytes = "hello" },
@@ -822,10 +894,76 @@ test "base64 accepts both alphabets and no padding" {
         .{ .text = "", .bytes = "" },
     };
     for (cases) |case| {
-        const bytes = try decodeBase64(gpa, case.text);
+        const bytes = try decodeBase64(gpa, case.text, base64_std);
         defer gpa.free(bytes);
         try std.testing.expectEqualSlices(u8, case.bytes, bytes);
     }
+
+    // Only the padded standard form skips the copy.
+    try std.testing.expect(isCanonicalBase64("aGVsbG8="));
+    try std.testing.expect(isCanonicalBase64(""));
+    try std.testing.expect(!isCanonicalBase64("aGVsbG8"));
+    try std.testing.expect(!isCanonicalBase64("-_8="));
+    try std.testing.expect(!isCanonicalBase64("A==="));
+}
+
+/// A codec that counts calls, to show that `Options.base64` is the one used.
+const Counting = struct {
+    var encoded: usize = 0;
+    var decoded: usize = 0;
+
+    const codec: Base64 = .{
+        .encoded_len = stdEncodedLen,
+        .encode = countEncode,
+        .decoded_len = stdDecodedLen,
+        .decode = countDecode,
+    };
+
+    fn countEncode(dest: []u8, source: []const u8) []const u8 {
+        encoded += 1;
+        return stdEncode(dest, source);
+    }
+
+    fn countDecode(dest: []u8, source: []const u8) std.base64.Error![]const u8 {
+        decoded += 1;
+        return stdDecode(dest, source);
+    }
+};
+
+test "a bytes field larger than a chunk survives, and the codec is the one passed" {
+    const gpa = std.testing.allocator;
+
+    var blob: [8000]u8 = undefined;
+    var seed: u64 = 1;
+    for (&blob) |*b| {
+        seed = seed *% 6364136223846793005 +% 1442695040888963407;
+        b.* = @truncate(seed >> 33);
+    }
+
+    // 8000 bytes is more than one chunk's worth of base64, which is where the
+    // chunk arithmetic has to be right.
+    var out: Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    Counting.encoded = 0;
+    Counting.decoded = 0;
+    try encode(test_Msg, .{ .blob = &blob }, .{ .base64 = Counting.codec }, &out.writer);
+    try std.testing.expect(Counting.encoded > 1);
+
+    var parsed = try decode(
+        test_Msg,
+        out.written(),
+        .{ .base64 = Counting.codec },
+        gpa,
+    );
+    defer parsed.deinit();
+    try std.testing.expect(Counting.decoded >= 1);
+    try std.testing.expectEqualSlices(u8, &blob, parsed.value.blob);
+
+    // The bytes on the wire are the same whichever codec wrote them.
+    var plain: Io.Writer.Allocating = .init(gpa);
+    defer plain.deinit();
+    try encode(test_Msg, .{ .blob = &blob }, .{}, &plain.writer);
+    try std.testing.expectEqualStrings(plain.written(), out.written());
 }
 
 const test_Kind = enum(i32) {

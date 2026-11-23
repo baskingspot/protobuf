@@ -23,7 +23,7 @@ try w.writeScalar(.u32, 150);
 `encode` and `decode` build on those primitives. A plain Zig struct declares
 its field numbers in a `Descriptor(@This())` table.
 
-The project is incubating. Its pre-1.0 API is unstable.
+The API is pre-1.0: pin a version, and expect it to move.
 
 ## What is in it
 
